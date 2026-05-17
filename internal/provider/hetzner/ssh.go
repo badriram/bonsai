@@ -2,9 +2,6 @@ package hetzner
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
 	"fmt"
 	"net"
 	"strings"
@@ -30,29 +27,16 @@ func (p *Provider) ensureSSHKey(ctx context.Context, name, env string) (*hcloud.
 		return keys[0], nil
 	}
 
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	authorized, privPEM, err := generateAuthorizedKey()
 	if err != nil {
 		return nil, err
 	}
-	sshPub, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		return nil, err
-	}
-	authorized := ssh.MarshalAuthorizedKey(sshPub)
-
-	privBytes, err := ssh.MarshalPrivateKey(priv, "bonsai/"+name+"/"+env)
-	if err != nil {
-		return nil, err
-	}
-	privPEM := pem.EncodeToMemory(privBytes)
-
 	if err := p.store.Write(ctx, secretKey(name, env, sshLocalKeyName), string(privPEM)); err != nil {
 		return nil, fmt.Errorf("save private key: %w", err)
 	}
-
 	key, _, err := p.client.SSHKey.Create(ctx, hcloud.SSHKeyCreateOpts{
 		Name:      "bonsai-" + name + "-" + env,
-		PublicKey: string(authorized),
+		PublicKey: authorized,
 		Labels:    clusterLabels(name, env, "ssh-key"),
 	})
 	if err != nil {

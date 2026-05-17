@@ -1,0 +1,31 @@
+#!/bin/sh
+# Hetzner image builder. Installs k3s binary onto an Ubuntu 24.04 server,
+# then shuts down so Server.CreateImage can snapshot a consistent disk.
+set -eu
+
+K3S_VERSION="{{.K3sVersion}}"
+
+apt-get update -y >/dev/null
+apt-get install -y curl ca-certificates >/dev/null
+
+# Install k3s binaries but do NOT enable/start the service. Each cluster
+# launches with its own server/agent flags via user-data at boot time.
+curl -sfL https://get.k3s.io | \
+  INSTALL_K3S_VERSION="$K3S_VERSION" \
+  INSTALL_K3S_SKIP_ENABLE=true \
+  INSTALL_K3S_SKIP_START=true \
+  sh -
+
+# Pre-pull the k3s-upgrade image so the first system-upgrade-controller Plan
+# doesn't have to do it under cluster load. Best-effort.
+ctr image pull docker.io/rancher/k3s-upgrade:"$K3S_VERSION" || true
+
+# Modest hardening.
+cat >/etc/sysctl.d/99-bonsai.conf <<'EOF'
+net.ipv4.ip_forward=1
+net.bridge.bridge-nf-call-iptables=1
+EOF
+sysctl --system >/dev/null
+
+sync
+shutdown -h +1

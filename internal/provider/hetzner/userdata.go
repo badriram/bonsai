@@ -21,8 +21,13 @@ type workerVars struct {
 	Token      string
 }
 
-func renderServerUserData(v serverVars) (string, error) { return render("userdata/server.sh.tmpl", v) }
-func renderWorkerUserData(v workerVars) (string, error) { return render("userdata/worker.sh.tmpl", v) }
+type builderVars struct {
+	K3sVersion string
+}
+
+func renderServerUserData(v serverVars) (string, error)   { return render("userdata/server.sh.tmpl", v) }
+func renderWorkerUserData(v workerVars) (string, error)   { return render("userdata/worker.sh.tmpl", v) }
+func renderBuilderUserData(v builderVars) (string, error) { return render("userdata/builder.sh.tmpl", v) }
 
 func render(path string, v any) (string, error) {
 	raw, err := userdataFS.ReadFile(path)

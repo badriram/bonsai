@@ -14,12 +14,12 @@ import (
 //
 // Resolution order:
 //   1. An AMI tagged bonsai-node:latest=true that this account owns
-//      (produced by `bonsai bake-ami`, once that lands).
+//      (produced by `bonsai bake-image`).
 //   2. Latest Amazon Linux 2023 x86_64 from Amazon's public AMIs.
 //
-// AL2023 is the Phase 1 default — aws-cli v2 ships with it and the k3s install
-// script works out of the box. The bake-ami pipeline will replace this with a
-// hardened Alpine + k3s image.
+// AL2023 is the fallback for accounts that haven't baked an image yet —
+// aws-cli v2 ships with it and the k3s install script works out of the box.
+// Once `bake-image` has run, that hardened image is preferred.
 func (p *Provider) resolveNodeAMI(ctx context.Context) (string, error) {
 	if id, ok, err := p.findBakedAMI(ctx); err != nil {
 		return "", err

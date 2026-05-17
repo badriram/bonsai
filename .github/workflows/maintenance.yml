@@ -3,7 +3,7 @@ name: bonsai-maintenance
 # Operator-side maintenance. Runs in the Bonsai repo, NOT in consuming app repos.
 # Consuming apps' CI only ever runs `bonsai grow`.
 #
-# Currently manual-only: there is nothing to bake or rotate yet (bake-ami and
+# Currently manual-only: there is nothing to bake or rotate yet (bake-image and
 # the cluster registry land in Phase 1.5 / Phase 2). The weekly schedule will
 # be re-enabled then.
 
@@ -13,8 +13,8 @@ on:
       action:
         description: "What to run"
         type: choice
-        options: [bake-ami, rotate-workers]
-        default: bake-ami
+        options: [bake-image, rotate-workers]
+        default: bake-image
 
 jobs:
   run:

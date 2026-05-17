@@ -19,12 +19,20 @@ type workerVars struct {
 	Name, Env, Region, ControlPlaneURL string
 }
 
+type builderVars struct {
+	K3sVersion string
+}
+
 func renderServerUserData(v serverVars) (string, error) {
 	return renderUserData("userdata/server.sh.tmpl", v)
 }
 
 func renderWorkerUserData(v workerVars) (string, error) {
 	return renderUserData("userdata/worker.sh.tmpl", v)
+}
+
+func renderBuilderUserData(v builderVars) (string, error) {
+	return renderUserData("userdata/builder.sh.tmpl", v)
 }
 
 func renderUserData(path string, v any) (string, error) {

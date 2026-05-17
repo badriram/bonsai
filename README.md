@@ -30,7 +30,7 @@ bonsai logs      # tail
 **Operator** (sets Bonsai up once, runs scheduled maintenance):
 
 ```
-bonsai bake-ami            # build new Alpine + k3s AMI
+bonsai bake-image          # build new node image (AMI / snapshot)
 bonsai rotate-workers      # ASG instance refresh
 bonsai rotate-control      # snapshot + replace control plane
 bonsai upgrade --k3s vX.Y  # apply system-upgrade-controller Plan

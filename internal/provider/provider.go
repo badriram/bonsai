@@ -13,6 +13,11 @@ type PlatformProvider interface {
 	Provision(ctx context.Context, cfg config.ClusterConfig) (PlatformOutputs, error)
 	Destroy(ctx context.Context, name, env string) error
 	Status(ctx context.Context, name, env string) (PlatformStatus, error)
+
+	// RotateWorkers replaces every worker node in-place. amiRef is "latest"
+	// (use the latest bonsai-node-tagged image), an explicit AMI ID, or
+	// provider-specific reference (e.g. Hetzner snapshot ID).
+	RotateWorkers(ctx context.Context, name, env, amiRef string) error
 }
 
 // PlatformOutputs is the same shape on every provider — that's the point.

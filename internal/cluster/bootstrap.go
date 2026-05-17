@@ -103,9 +103,19 @@ func Bootstrap(ctx context.Context, c Config) (Outputs, error) {
 	}
 	kvURL := fmt.Sprintf("redis://valkey-primary.%s.svc.cluster.local:6379", c.AppNamespace())
 
-	// TODO: system-upgrade-controller + kured. They're operator-side concerns,
-	// not on the critical path for the URLs we return here. Will land in a
-	// follow-up so this PR stays scoped.
+	// kured (Kubernetes Reboot Daemon) — drains and reboots nodes safely
+	// after `apk upgrade` flips /var/run/reboot-required (or equivalent).
+	// One node at a time, cluster-aware.
+	if err := h.upgradeOrInstall(ctx, chartSpec{
+		Release: "kured", Namespace: "kube-system",
+		RepoURL: "https://kubereboot.github.io/charts", Chart: "kured", Version: "5.6.1",
+	}); err != nil {
+		return Outputs{}, fmt.Errorf("kured: %w", err)
+	}
+
+	// TODO: system-upgrade-controller — no official helm chart from Rancher,
+	// so installation requires fetching and applying their manifest YAML via
+	// the dynamic client. Will land in its own focused PR.
 
 	if err := mirrorSecret(ctx, k8s, c.AppNamespace(), "bonsai-postgres", pgURL); err != nil {
 		return Outputs{}, fmt.Errorf("mirror postgres secret: %w", err)

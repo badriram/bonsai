@@ -19,17 +19,27 @@ func newBakeAMICommand() *cobra.Command {
 }
 
 func newRotateWorkersCommand() *cobra.Command {
-	var name, env, ami string
+	var name, env, ami, providerName string
 	cmd := &cobra.Command{
 		Use:   "rotate-workers",
-		Short: "ASG instance refresh against the latest (or specified) AMI",
+		Short: "Replace every worker node, rolling, with the latest (or specified) AMI",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("not implemented (name=%s env=%s ami=%s)", name, env, ami)
+			p, err := selectProvider(cmd.Context(), providerName)
+			if err != nil {
+				return err
+			}
+			if err := p.RotateWorkers(cmd.Context(), name, env, ami); err != nil {
+				return err
+			}
+			fmt.Printf("instance refresh started for %s/%s (ami=%s)\n", name, env, ami)
+			return nil
 		},
 	}
+	cmd.Flags().StringVar(&providerName, "provider", "aws", "")
 	cmd.Flags().StringVar(&name, "name", "", "")
 	cmd.Flags().StringVar(&env, "env", "dev", "")
 	cmd.Flags().StringVar(&ami, "ami", "latest", "")
+	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
 

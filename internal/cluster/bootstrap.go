@@ -113,9 +113,11 @@ func Bootstrap(ctx context.Context, c Config) (Outputs, error) {
 		return Outputs{}, fmt.Errorf("kured: %w", err)
 	}
 
-	// TODO: system-upgrade-controller — no official helm chart from Rancher,
-	// so installation requires fetching and applying their manifest YAML via
-	// the dynamic client. Will land in its own focused PR.
+	// system-upgrade-controller — drives k3s version bumps via Plan CRDs.
+	// No official helm chart, so we apply Rancher's release manifests directly.
+	if err := installSystemUpgradeController(ctx, restCfg, dyn); err != nil {
+		return Outputs{}, fmt.Errorf("system-upgrade-controller: %w", err)
+	}
 
 	if err := mirrorSecret(ctx, k8s, c.AppNamespace(), "bonsai-postgres", pgURL); err != nil {
 		return Outputs{}, fmt.Errorf("mirror postgres secret: %w", err)

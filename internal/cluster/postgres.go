@@ -42,17 +42,23 @@ func applyPostgresCluster(ctx context.Context, dyn dynamic.Interface, c Config, 
 	desired.SetKind("Cluster")
 	desired.SetName(postgresClusterName)
 	desired.SetNamespace(ns)
-	desired.Object["spec"] = map[string]any{
+	spec := map[string]any{
 		"instances": postgresInstances,
 		"storage":   map[string]any{"size": postgresVolumeSize},
-		"backup": map[string]any{
+	}
+	// Backups only when a target bucket is configured. Providers without a
+	// managed S3 equivalent (Hetzner Phase 2) leave this empty; configure
+	// external S3 later if backups are required.
+	if c.BackupBucket != "" {
+		spec["backup"] = map[string]any{
 			"barmanObjectStore": map[string]any{
 				"destinationPath": fmt.Sprintf("s3://%s/%s/%s/postgres", c.BackupBucket, c.Name, c.Env),
 				"s3Credentials":   map[string]any{"inheritFromIAMRole": true},
 			},
 			"retentionPolicy": postgresRetention,
-		},
+		}
 	}
+	desired.Object["spec"] = spec
 
 	res := dyn.Resource(cnpgClusterGVR).Namespace(ns)
 	existing, err := res.Get(ctx, postgresClusterName, metav1.GetOptions{})

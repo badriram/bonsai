@@ -1,0 +1,14 @@
+#!/bin/sh
+# k3s server cloud-init for Hetzner. Templated by Bonsai.
+set -eu
+
+# Pin a known-good k3s. Bonsai pulls kubeconfig + token via SSH after this completes.
+curl -sfL https://get.k3s.io | \
+  INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+  sh -s - server \
+  --write-kubeconfig-mode=0644 \
+  --tls-san="{{.ControlIP}}" \
+  --disable=traefik
+
+# Marker so Bonsai's SSH poll knows server.sh finished, not just that sshd is up.
+touch /var/lib/bonsai-server-ready

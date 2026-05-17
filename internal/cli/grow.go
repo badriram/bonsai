@@ -7,6 +7,7 @@ import (
 	"github.com/badri/bonsai/internal/config"
 	"github.com/badri/bonsai/internal/provider"
 	awsprov "github.com/badri/bonsai/internal/provider/aws"
+	hetznerprov "github.com/badri/bonsai/internal/provider/hetzner"
 	"github.com/spf13/cobra"
 )
 
@@ -44,7 +45,9 @@ func selectProvider(ctx context.Context, name string) (provider.PlatformProvider
 	switch name {
 	case "aws":
 		return awsprov.New(ctx)
+	case "hetzner":
+		return hetznerprov.New(ctx)
 	default:
-		return nil, fmt.Errorf("provider %q not implemented in Phase 1", name)
+		return nil, fmt.Errorf("unknown provider %q (valid: aws, hetzner)", name)
 	}
 }

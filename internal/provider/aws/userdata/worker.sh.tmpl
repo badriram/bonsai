@@ -1,0 +1,33 @@
+#!/bin/sh
+# k3s worker bootstrap. Templated by Bonsai before being passed as EC2 user-data.
+set -eu
+
+NAME="{{.Name}}"
+ENV="{{.Env}}"
+REGION="{{.Region}}"
+CONTROL_PLANE_URL="{{.ControlPlaneURL}}"
+
+command -v aws >/dev/null 2>&1 || {
+  if command -v dnf >/dev/null; then dnf install -y awscli >/dev/null
+  elif command -v apk >/dev/null; then apk add --no-cache aws-cli >/dev/null
+  fi
+}
+
+# Wait for the server to publish the join token (it does this once k3s is up).
+for i in $(seq 1 60); do
+  TOKEN="$(aws ssm get-parameter \
+    --region "$REGION" \
+    --name "/bonsai/${NAME}/${ENV}/token" \
+    --with-decryption \
+    --query Parameter.Value \
+    --output text 2>/dev/null || true)"
+  [ -n "${TOKEN:-}" ] && break
+  sleep 10
+done
+
+[ -n "${TOKEN:-}" ] || { echo "join token never appeared"; exit 1; }
+
+curl -sfL https://get.k3s.io | \
+  K3S_URL="$CONTROL_PLANE_URL" \
+  K3S_TOKEN="$TOKEN" \
+  sh -

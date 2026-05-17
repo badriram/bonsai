@@ -12,7 +12,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
-	"github.com/badri/bonsai/internal/cluster"
 	bcfg "github.com/badri/bonsai/internal/config"
 	"github.com/badri/bonsai/internal/provider"
 	"github.com/badri/bonsai/internal/secrets"
@@ -55,23 +54,44 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	if err != nil {
 		return provider.PlatformOutputs{}, err
 	}
-	_ = net // wired into control plane + ASG in the next change
 
-	// Backup bucket name is deterministic per AWS account; created out-of-band
-	// once (see docs/operator.md). The role grants access scoped to this cluster's prefix.
-	backupBucket := "bonsai-backups-" + p.accountID(ctx)
-	if _, err := p.ensureIAM(ctx, cfg.Name, cfg.Env, backupBucket); err != nil {
+	backupBucket := "bonsai-backups-" + p.accountID()
+	instanceProfile, err := p.ensureIAM(ctx, cfg.Name, cfg.Env, backupBucket)
+	if err != nil {
 		return provider.PlatformOutputs{}, err
 	}
 
-	// Next changes wire in:
-	//   ensureK3sToken  (random → Parameter Store)
-	//   ensureControlPlane (EC2 with templated server.sh user-data)
-	//   ensureWorkers   (ASG with worker.sh)
-	//   cluster.Bootstrap (helm-install CNPG / Valkey / SUC / kured)
-	//   writeOutputs    (kubeconfig + URLs into Parameter Store)
-	_ = cluster.Bootstrap
-	return provider.PlatformOutputs{}, fmt.Errorf("aws.Provider.Provision: VPC + IAM done; compute and bootstrap still TODO")
+	if _, err := p.ensureK3sToken(ctx, cfg.Name, cfg.Env); err != nil {
+		return provider.PlatformOutputs{}, err
+	}
+
+	controlDNS, err := p.ensureControlPlane(ctx, cfg.Name, cfg.Env, net, instanceProfile)
+	if err != nil {
+		return provider.PlatformOutputs{}, err
+	}
+	controlURL := "https://" + controlDNS + ":6443"
+
+	if err := p.waitForK3sReady(ctx, cfg.Name, cfg.Env); err != nil {
+		return provider.PlatformOutputs{}, fmt.Errorf("control plane never became ready: %w", err)
+	}
+
+	workerCount := int32(cfg.Workers)
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if err := p.ensureWorkers(ctx, cfg.Name, cfg.Env, workerCount, net, instanceProfile, controlURL); err != nil {
+		return provider.PlatformOutputs{}, err
+	}
+
+	// Still to come (next change): cluster.Bootstrap installs CNPG + Valkey +
+	// system-upgrade-controller + kured via the helm SDK, then writes
+	// postgres_url + kv_url + namespace secrets.
+	return provider.PlatformOutputs{
+		ClusterEndpoint:    controlURL,
+		KubeconfigLocation: "ssm://" + cfg.SSMPathPrefix() + "kubeconfig",
+		PostgresURL:        "(pending in-cluster bootstrap)",
+		KVURL:              "(pending in-cluster bootstrap)",
+	}, nil
 }
 
 func (p *Provider) Destroy(ctx context.Context, name, env string) error {
@@ -83,9 +103,8 @@ func (p *Provider) Status(ctx context.Context, name, env string) (provider.Platf
 }
 
 // accountID is a best-effort lookup used to name the shared backup bucket.
-// Returns "unknown" on failure — only the caller's policy ARN is affected,
-// and the operator can override via env BONSAI_BACKUP_BUCKET in a later change.
-func (p *Provider) accountID(ctx context.Context) string {
+// Operator can override via env BONSAI_BACKUP_BUCKET in a later change.
+func (p *Provider) accountID() string {
 	if p.envLookup != nil {
 		if v := p.envLookup("AWS_ACCOUNT_ID"); v != "" {
 			return v

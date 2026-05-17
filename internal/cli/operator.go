@@ -57,13 +57,27 @@ func newRotateWorkersCommand() *cobra.Command {
 }
 
 func newRotateControlCommand() *cobra.Command {
-	return &cobra.Command{
+	var name, env, providerName string
+	cmd := &cobra.Command{
 		Use:   "rotate-control",
-		Short: "Snapshot etcd + recreate control plane from new AMI",
+		Short: "Snapshot state, recreate control plane from latest image, restore on boot",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("not implemented in Phase 1")
+			p, err := selectProvider(cmd.Context(), providerName)
+			if err != nil {
+				return err
+			}
+			if err := p.RotateControl(cmd.Context(), name, env); err != nil {
+				return err
+			}
+			fmt.Printf("control plane rotated for %s/%s\n", name, env)
+			return nil
 		},
 	}
+	cmd.Flags().StringVar(&providerName, "provider", "aws", "")
+	cmd.Flags().StringVar(&name, "name", "", "")
+	cmd.Flags().StringVar(&env, "env", "dev", "")
+	_ = cmd.MarkFlagRequired("name")
+	return cmd
 }
 
 func newUpgradeCommand() *cobra.Command {

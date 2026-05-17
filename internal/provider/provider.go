@@ -37,6 +37,12 @@ type PlatformProvider interface {
 	// + RotateWorkers calls pick it up. Account-wide / region-wide, not
 	// per-cluster.
 	BakeImage(ctx context.Context, k3sVersion string) (imageID string, err error)
+
+	// RotateControl replaces the control plane instance, preserving cluster
+	// state via a provider-native snapshot mechanism. The stable endpoint
+	// (Elastic IP on AWS, floating IP on Hetzner) survives the rotation, so
+	// workers reconnect automatically. Expect a few minutes of API downtime.
+	RotateControl(ctx context.Context, name, env string) error
 }
 
 // PlatformOutputs is the same shape on every provider — that's the point.

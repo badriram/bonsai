@@ -66,11 +66,25 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		return provider.PlatformOutputs{}, err
 	}
 
-	controlDNS, err := p.ensureControlPlane(ctx, cfg.Name, cfg.Env, net, instanceProfile)
+	eip, err := p.ensureControlEIP(ctx, cfg.Name, cfg.Env)
 	if err != nil {
 		return provider.PlatformOutputs{}, err
 	}
-	controlURL := "https://" + controlDNS + ":6443"
+
+	controlInstanceID, err := p.ensureControlPlane(ctx, controlPlaneSpec{
+		Name: cfg.Name, Env: cfg.Env,
+		Net:             net,
+		InstanceProfile: instanceProfile,
+		ControlIP:       eip.PublicIP,
+		BackupBucket:    backupBucket,
+	})
+	if err != nil {
+		return provider.PlatformOutputs{}, err
+	}
+	if err := p.associateControlEIP(ctx, eip, controlInstanceID); err != nil {
+		return provider.PlatformOutputs{}, fmt.Errorf("associate control EIP: %w", err)
+	}
+	controlURL := "https://" + eip.PublicIP + ":6443"
 
 	if err := p.waitForK3sReady(ctx, cfg.Name, cfg.Env); err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("control plane never became ready: %w", err)

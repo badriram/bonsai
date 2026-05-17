@@ -30,6 +30,7 @@ func (p *Provider) Destroy(ctx context.Context, name, env string) error {
 		{"asg", func() error { return p.destroyASG(ctx, name, env) }},
 		{"launch-template", func() error { return p.destroyLaunchTemplate(ctx, name, env) }},
 		{"control-plane", func() error { return p.destroyControlPlane(ctx, name, env) }},
+		{"control-eip", func() error { return p.releaseControlEIP(ctx, name, env) }},
 		{"iam", func() error { return p.destroyIAM(ctx, name, env) }},
 		{"security-groups", func() error { return p.destroySecurityGroups(ctx, name, env) }},
 		{"route-table", func() error { return p.destroyRouteTable(ctx, name, env) }},
@@ -169,7 +170,8 @@ func (p *Provider) destroyIAM(ctx context.Context, name, env string) error {
 		return fmt.Errorf("delete instance profile: %w", err)
 	}
 
-	// Delete any inline policies before the role itself — IAM requires this.
+	// Delete inline policies + detach managed policies before the role
+	// itself — IAM requires the role to have no policy references.
 	policies, err := p.iam.ListRolePolicies(ctx, &iam.ListRolePoliciesInput{RoleName: aws.String(roleName)})
 	if err != nil && !isIAMNotFound(err) {
 		return fmt.Errorf("list role policies: %w", err)
@@ -180,6 +182,19 @@ func (p *Provider) destroyIAM(ctx context.Context, name, env string) error {
 				RoleName: aws.String(roleName), PolicyName: aws.String(pName),
 			}); err != nil && !isIAMNotFound(err) {
 				return fmt.Errorf("delete policy %s: %w", pName, err)
+			}
+		}
+	}
+	attached, err := p.iam.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{RoleName: aws.String(roleName)})
+	if err != nil && !isIAMNotFound(err) {
+		return fmt.Errorf("list attached policies: %w", err)
+	}
+	if err == nil {
+		for _, a := range attached.AttachedPolicies {
+			if _, err := p.iam.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+				RoleName: aws.String(roleName), PolicyArn: a.PolicyArn,
+			}); err != nil && !isIAMNotFound(err) {
+				return fmt.Errorf("detach policy %s: %w", aws.ToString(a.PolicyArn), err)
 			}
 		}
 	}

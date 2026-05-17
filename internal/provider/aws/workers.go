@@ -14,8 +14,8 @@ import (
 
 // Workers run as an ASG. Each new instance boots, pulls the cluster token from
 // Parameter Store, and joins via the standard k3s agent install. Scaling is a
-// single SetDesiredCapacity. Rotation for AMI/k3s updates is an instance
-// refresh (added when bake-ami lands).
+// single SetDesiredCapacity. Rotation for image/k3s updates is an instance
+// refresh against a new launch template version (see rotate.go).
 
 const (
 	defaultWorkerInstanceType = "t3.small"

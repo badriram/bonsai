@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
+	"github.com/badri/bonsai/internal/cluster"
 	bcfg "github.com/badri/bonsai/internal/config"
 	"github.com/badri/bonsai/internal/provider"
 	"github.com/badri/bonsai/internal/secrets"
@@ -83,14 +84,34 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		return provider.PlatformOutputs{}, err
 	}
 
-	// Still to come (next change): cluster.Bootstrap installs CNPG + Valkey +
-	// system-upgrade-controller + kured via the helm SDK, then writes
-	// postgres_url + kv_url + namespace secrets.
+	kubeconfig, err := p.store.Read(ctx, cfg.SSMPathPrefix()+"kubeconfig")
+	if err != nil {
+		return provider.PlatformOutputs{}, fmt.Errorf("fetch kubeconfig: %w", err)
+	}
+
+	out, err := cluster.Bootstrap(ctx, cluster.Config{
+		Kubeconfig:   []byte(kubeconfig),
+		Name:         cfg.Name,
+		Env:          cfg.Env,
+		BackupBucket: backupBucket,
+		BackupRegion: p.awsCfg.Region,
+	})
+	if err != nil {
+		return provider.PlatformOutputs{}, fmt.Errorf("in-cluster bootstrap: %w", err)
+	}
+
+	if err := p.store.Write(ctx, cfg.SSMPathPrefix()+"postgres_url", out.PostgresURL); err != nil {
+		return provider.PlatformOutputs{}, fmt.Errorf("write postgres_url: %w", err)
+	}
+	if err := p.store.Write(ctx, cfg.SSMPathPrefix()+"kv_url", out.KVURL); err != nil {
+		return provider.PlatformOutputs{}, fmt.Errorf("write kv_url: %w", err)
+	}
+
 	return provider.PlatformOutputs{
 		ClusterEndpoint:    controlURL,
 		KubeconfigLocation: "ssm://" + cfg.SSMPathPrefix() + "kubeconfig",
-		PostgresURL:        "(pending in-cluster bootstrap)",
-		KVURL:              "(pending in-cluster bootstrap)",
+		PostgresURL:        out.PostgresURL,
+		KVURL:              out.KVURL,
 	}, nil
 }
 

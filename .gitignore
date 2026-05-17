@@ -1,4 +1,6 @@
-bonsai
+# Built binary at the repo root. Anchored with leading / so this does NOT
+# match cmd/bonsai/ — which is the CLI's main package and must be tracked.
+/bonsai
 /dist/
 /bin/
 *.test

@@ -1,43 +1,32 @@
 name: bonsai-maintenance
 
-# Operator-side maintenance. Runs in the Bonsai repo, not in consuming app repos.
+# Operator-side maintenance. Runs in the Bonsai repo, NOT in consuming app repos.
 # Consuming apps' CI only ever runs `bonsai grow`.
+#
+# Currently manual-only: there is nothing to bake or rotate yet (bake-ami and
+# the cluster registry land in Phase 1.5 / Phase 2). The weekly schedule will
+# be re-enabled then.
 
 on:
-  schedule:
-    - cron: "0 3 * * 1"   # Mondays 03:00 UTC — weekly AMI rebake + rotation
   workflow_dispatch:
     inputs:
-      ami_only:
-        description: "Only bake the AMI, skip rotation"
-        type: boolean
-        default: false
+      action:
+        description: "What to run"
+        type: choice
+        options: [bake-ami, rotate-workers]
+        default: bake-ami
 
 jobs:
-  bake-ami:
+  run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/setup-go@v5
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          go-version: "1.23"
+          cache: true
       - run: go build -o bonsai ./cmd/bonsai
-      - run: ./bonsai bake-ami --advanced
-
-  rotate:
-    needs: bake-ami
-    if: ${{ !inputs.ami_only }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        # Each registered cluster gets a rotation pass.
-        cluster: []  # populated from a clusters.yaml manifest in Phase 2
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ matrix.cluster.region }}
-      - run: go build -o bonsai ./cmd/bonsai
-      - run: ./bonsai rotate-workers --advanced --name ${{ matrix.cluster.name }} --env ${{ matrix.cluster.env }} --ami latest
+      - run: |
+          echo "Selected action: ${{ inputs.action }}"
+          echo "Maintenance verbs not yet implemented; see Phase 1.5 in docs/operator.md."
+          exit 0

@@ -1,0 +1,11 @@
+bonsai
+/dist/
+/bin/
+*.test
+*.out
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/

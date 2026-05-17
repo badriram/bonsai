@@ -1,0 +1,11 @@
+#!/bin/sh
+# k3s worker cloud-init for Hetzner. Templated by Bonsai.
+set -eu
+
+curl -sfL https://get.k3s.io | \
+  INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+  K3S_URL="https://{{.ControlIP}}:6443" \
+  K3S_TOKEN="{{.Token}}" \
+  sh -
+
+touch /var/lib/bonsai-worker-ready

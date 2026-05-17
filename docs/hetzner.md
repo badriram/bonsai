@@ -16,9 +16,9 @@ bonsai grow --provider hetzner --name my-app --env prod --region nbg1
 | `status` | ✅ |
 | `upgrade --k3s` | ✅ |
 | `upgrade --component` | ✅ |
-| `bake-image` | ⏳ Phase 2.1 |
-| `rotate-workers` | ⏳ Phase 2.1 |
-| `rotate-control` | ⏳ Phase 2.1 |
+| `bake-image` | ✅ |
+| `rotate-workers` | ✅ |
+| `rotate-control` | ✅ |
 
 ## Differences from AWS
 

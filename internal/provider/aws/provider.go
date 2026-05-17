@@ -127,6 +127,19 @@ func (p *Provider) UpgradeK3s(ctx context.Context, name, env, version string) er
 	return cluster.UpgradeK3s(ctx, []byte(kc), version)
 }
 
+// UpgradeComponent fetches the kubeconfig and delegates to
+// cluster.UpgradeComponent, which re-runs the helm install (or manifest
+// re-apply for SUC) against the pinned chart version.
+func (p *Provider) UpgradeComponent(ctx context.Context, name, env, component string) error {
+	kc, err := p.store.Read(ctx, "/bonsai/"+name+"/"+env+"/kubeconfig")
+	if err != nil {
+		return fmt.Errorf("fetch kubeconfig: %w", err)
+	}
+	return cluster.UpgradeComponent(ctx, cluster.Config{
+		Kubeconfig: []byte(kc), Name: name, Env: env,
+	}, component)
+}
+
 func (p *Provider) accountID() string {
 	if p.envLookup != nil {
 		if v := p.envLookup("AWS_ACCOUNT_ID"); v != "" {

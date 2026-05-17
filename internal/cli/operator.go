@@ -77,7 +77,11 @@ func newUpgradeCommand() *cobra.Command {
 				fmt.Println("watch progress with: kubectl get plans -n system-upgrade")
 				return nil
 			}
-			return fmt.Errorf("--component not yet implemented")
+			if err := p.UpgradeComponent(cmd.Context(), name, env, component); err != nil {
+				return err
+			}
+			fmt.Printf("%s upgraded to pinned version for %s/%s\n", component, name, env)
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&providerName, "provider", "aws", "")

@@ -12,7 +12,7 @@ import (
 var userdataFS embed.FS
 
 type serverVars struct {
-	Name, Env, Region string
+	Name, Env, Region, ControlIP, BackupBucket string
 }
 
 type workerVars struct {

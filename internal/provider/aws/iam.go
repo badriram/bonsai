@@ -31,10 +31,22 @@ func (p *Provider) ensureIAM(ctx context.Context, name, env, backupBucket string
 	if err := p.putInlinePolicy(ctx, roleName, "s3-backup", s3Policy(name, env, backupBucket)); err != nil {
 		return "", fmt.Errorf("s3 policy: %w", err)
 	}
+	// AmazonSSMManagedInstanceCore enables SSM Run Command, which rotate-control
+	// uses to take a state snapshot on the live control plane before terminating.
+	if err := p.attachManagedPolicy(ctx, roleName, "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"); err != nil {
+		return "", fmt.Errorf("attach SSM managed policy: %w", err)
+	}
 	if err := p.ensureInstanceProfile(ctx, roleName); err != nil {
 		return "", fmt.Errorf("ensure instance profile: %w", err)
 	}
 	return roleName, nil
+}
+
+func (p *Provider) attachManagedPolicy(ctx context.Context, roleName, policyArn string) error {
+	_, err := p.iam.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{
+		RoleName: aws.String(roleName), PolicyArn: aws.String(policyArn),
+	})
+	return err
 }
 
 func iamName(name, env string) string { return "bonsai-" + name + "-" + env }

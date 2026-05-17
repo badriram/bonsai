@@ -16,27 +16,41 @@ import (
 // Phase 1: single EC2 in the public subnet, k3s server with embedded SQLite.
 // Phase 3 replaces this with a 3-node ASG behind an NLB, embedded etcd.
 
-const (
-	defaultControlPlaneInstanceType = "t3.small"
-)
+const defaultControlPlaneInstanceType = "t3.small"
 
-// ensureControlPlane returns the public DNS name of the running k3s server.
+// controlPlaneSpec carries everything ensureControlPlane needs to either find
+// the current instance or launch a fresh one.
+type controlPlaneSpec struct {
+	Name, Env       string
+	Net             vpcInfra
+	InstanceProfile string
+	ControlIP       string // EIP that the new server publishes as its endpoint
+	BackupBucket    string // S3 bucket the restore-on-boot branch checks
+}
+
+// ensureControlPlane returns the EC2 instance ID of the running k3s server.
 // Idempotent: looks up an instance tagged role=control-plane; launches one if
 // missing; returns the existing one if already running.
-func (p *Provider) ensureControlPlane(ctx context.Context, name, env string, net vpcInfra, instanceProfile string) (publicDNS string, err error) {
-	existing, err := p.findRunningInstance(ctx, name, env, "control-plane")
+func (p *Provider) ensureControlPlane(ctx context.Context, spec controlPlaneSpec) (instanceID string, err error) {
+	existing, err := p.findRunningInstance(ctx, spec.Name, spec.Env, "control-plane")
 	if err != nil {
 		return "", err
 	}
 	if existing != nil {
-		return aws.ToString(existing.PublicDnsName), nil
+		return aws.ToString(existing.InstanceId), nil
 	}
+	return p.launchControlPlane(ctx, spec)
+}
 
+func (p *Provider) launchControlPlane(ctx context.Context, spec controlPlaneSpec) (string, error) {
 	amiID, err := p.resolveNodeAMI(ctx)
 	if err != nil {
 		return "", err
 	}
-	userData, err := renderServerUserData(serverVars{Name: name, Env: env, Region: p.awsCfg.Region})
+	userData, err := renderServerUserData(serverVars{
+		Name: spec.Name, Env: spec.Env, Region: p.awsCfg.Region,
+		ControlIP: spec.ControlIP, BackupBucket: spec.BackupBucket,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -46,20 +60,18 @@ func (p *Provider) ensureControlPlane(ctx context.Context, name, env string, net
 		InstanceType:       ec2types.InstanceType(defaultControlPlaneInstanceType),
 		MinCount:           aws.Int32(1),
 		MaxCount:           aws.Int32(1),
-		SubnetId:           aws.String(net.SubnetID),
-		SecurityGroupIds:   []string{net.SGServer},
-		IamInstanceProfile: &ec2types.IamInstanceProfileSpecification{Name: aws.String(instanceProfile)},
+		SubnetId:           aws.String(spec.Net.SubnetID),
+		SecurityGroupIds:   []string{spec.Net.SGServer},
+		IamInstanceProfile: &ec2types.IamInstanceProfileSpecification{Name: aws.String(spec.InstanceProfile)},
 		UserData:           aws.String(userData),
 		TagSpecifications: []ec2types.TagSpecification{
-			tagSpec(ec2types.ResourceTypeInstance, name, env, "control-plane"),
+			tagSpec(ec2types.ResourceTypeInstance, spec.Name, spec.Env, "control-plane"),
 		},
 	})
 	if err != nil {
 		return "", fmt.Errorf("run control plane: %w", err)
 	}
-	instanceID := aws.ToString(out.Instances[0].InstanceId)
-
-	return p.waitForPublicDNS(ctx, instanceID)
+	return aws.ToString(out.Instances[0].InstanceId), nil
 }
 
 func (p *Provider) findRunningInstance(ctx context.Context, name, env, role string) (*ec2types.Instance, error) {
@@ -75,28 +87,6 @@ func (p *Provider) findRunningInstance(ctx context.Context, name, env, role stri
 		}
 	}
 	return nil, nil
-}
-
-func (p *Provider) waitForPublicDNS(ctx context.Context, instanceID string) (string, error) {
-	deadline := time.Now().Add(5 * time.Minute)
-	for time.Now().Before(deadline) {
-		out, err := p.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{instanceID}})
-		if err != nil {
-			return "", err
-		}
-		if len(out.Reservations) > 0 && len(out.Reservations[0].Instances) > 0 {
-			dns := aws.ToString(out.Reservations[0].Instances[0].PublicDnsName)
-			if dns != "" {
-				return dns, nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
-	}
-	return "", fmt.Errorf("timed out waiting for public DNS on %s", instanceID)
 }
 
 // waitForK3sReady polls Parameter Store for the kubeconfig that server.sh

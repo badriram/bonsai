@@ -115,14 +115,6 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	}, nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, name, env string) error {
-	return fmt.Errorf("aws.Provider.Destroy: not yet implemented")
-}
-
-func (p *Provider) Status(ctx context.Context, name, env string) (provider.PlatformStatus, error) {
-	return provider.PlatformStatus{}, fmt.Errorf("aws.Provider.Status: not yet implemented")
-}
-
 // accountID is a best-effort lookup used to name the shared backup bucket.
 // Operator can override via env BONSAI_BACKUP_BUCKET in a later change.
 func (p *Provider) accountID() string {

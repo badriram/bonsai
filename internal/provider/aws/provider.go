@@ -117,6 +117,16 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 
 // accountID is a best-effort lookup used to name the shared backup bucket.
 // Operator can override via env BONSAI_BACKUP_BUCKET in a later change.
+// UpgradeK3s fetches the kubeconfig from Parameter Store and hands off to
+// cluster.UpgradeK3s, which applies the SUC Plan CRDs.
+func (p *Provider) UpgradeK3s(ctx context.Context, name, env, version string) error {
+	kc, err := p.store.Read(ctx, "/bonsai/"+name+"/"+env+"/kubeconfig")
+	if err != nil {
+		return fmt.Errorf("fetch kubeconfig: %w", err)
+	}
+	return cluster.UpgradeK3s(ctx, []byte(kc), version)
+}
+
 func (p *Provider) accountID() string {
 	if p.envLookup != nil {
 		if v := p.envLookup("AWS_ACCOUNT_ID"); v != "" {

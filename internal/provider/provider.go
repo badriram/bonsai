@@ -18,6 +18,12 @@ type PlatformProvider interface {
 	// (use the latest bonsai-node-tagged image), an explicit AMI ID, or
 	// provider-specific reference (e.g. Hetzner snapshot ID).
 	RotateWorkers(ctx context.Context, name, env, amiRef string) error
+
+	// UpgradeK3s applies system-upgrade-controller Plan CRDs to bump k3s on
+	// every node. The controller does the draining, binary swap, and uncordon;
+	// Bonsai just publishes the desired version. version is the k3s release
+	// tag, e.g. "v1.31.0+k3s1".
+	UpgradeK3s(ctx context.Context, name, env, version string) error
 }
 
 // PlatformOutputs is the same shape on every provider — that's the point.

@@ -54,16 +54,38 @@ func newRotateControlCommand() *cobra.Command {
 }
 
 func newUpgradeCommand() *cobra.Command {
-	var k3sVersion, component string
+	var k3sVersion, component, name, env, providerName string
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Upgrade k3s or an in-cluster component",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("not implemented (k3s=%s component=%s)", k3sVersion, component)
+			if k3sVersion == "" && component == "" {
+				return fmt.Errorf("specify --k3s <version> or --component <name>")
+			}
+			if k3sVersion != "" && component != "" {
+				return fmt.Errorf("--k3s and --component are mutually exclusive")
+			}
+			p, err := selectProvider(cmd.Context(), providerName)
+			if err != nil {
+				return err
+			}
+			if k3sVersion != "" {
+				if err := p.UpgradeK3s(cmd.Context(), name, env, k3sVersion); err != nil {
+					return err
+				}
+				fmt.Printf("k3s upgrade Plan applied for %s/%s → %s\n", name, env, k3sVersion)
+				fmt.Println("watch progress with: kubectl get plans -n system-upgrade")
+				return nil
+			}
+			return fmt.Errorf("--component not yet implemented")
 		},
 	}
+	cmd.Flags().StringVar(&providerName, "provider", "aws", "")
+	cmd.Flags().StringVar(&name, "name", "", "")
+	cmd.Flags().StringVar(&env, "env", "dev", "")
 	cmd.Flags().StringVar(&k3sVersion, "k3s", "", "k3s target version, e.g. v1.31.0+k3s1")
 	cmd.Flags().StringVar(&component, "component", "", "cnpg | valkey | kured | system-upgrade-controller")
+	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
 

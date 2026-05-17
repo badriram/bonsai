@@ -24,6 +24,12 @@ type PlatformProvider interface {
 	// Bonsai just publishes the desired version. version is the k3s release
 	// tag, e.g. "v1.31.0+k3s1".
 	UpgradeK3s(ctx context.Context, name, env, version string) error
+
+	// UpgradeComponent re-runs the install for a single in-cluster component
+	// against its currently pinned version. Use after bumping a version in
+	// internal/cluster/charts.go. Valid components:
+	//   cert-manager | cnpg | valkey | kured | system-upgrade-controller
+	UpgradeComponent(ctx context.Context, name, env, component string) error
 }
 
 // PlatformOutputs is the same shape on every provider — that's the point.

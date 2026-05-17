@@ -3,7 +3,6 @@ package cli
 import "github.com/spf13/cobra"
 
 func NewRootCommand() *cobra.Command {
-	advanced := false
 	root := &cobra.Command{
 		Use:   "bonsai",
 		Short: "Provision k3s clusters with Postgres + KV on any cloud",
@@ -14,7 +13,7 @@ Developer verbs: grow, status, logs.
 Operator verbs (--advanced): bake-ami, rotate-workers, rotate-control,
 upgrade, destroy.`,
 	}
-	root.PersistentFlags().BoolVar(&advanced, "advanced", false, "show operator commands in help")
+	root.PersistentFlags().Bool("advanced", false, "show operator commands in help")
 
 	root.AddCommand(
 		newGrowCommand(),
@@ -22,17 +21,28 @@ upgrade, destroy.`,
 		newLogsCommand(),
 	)
 
-	// Operator commands — hidden unless --advanced is passed.
-	for _, c := range []*cobra.Command{
+	operator := []*cobra.Command{
 		newBakeAMICommand(),
 		newRotateWorkersCommand(),
 		newRotateControlCommand(),
 		newUpgradeCommand(),
 		newDestroyCommand(),
-	} {
-		c.Hidden = !advanced
+	}
+	for _, c := range operator {
+		c.Hidden = true
 		root.AddCommand(c)
 	}
+
+	// Cobra builds the command tree before parsing flags, so we flip Hidden
+	// inside the help function — which runs after flag parsing.
+	defaultHelp := root.HelpFunc()
+	root.SetHelpFunc(func(c *cobra.Command, args []string) {
+		advanced, _ := c.Root().PersistentFlags().GetBool("advanced")
+		for _, o := range operator {
+			o.Hidden = !advanced
+		}
+		defaultHelp(c, args)
+	})
 
 	return root
 }

@@ -5,7 +5,7 @@
 Architecture, decisions, phase plan, and trade-off history live in the
 **Banyan trunk `bnyn-ccb8a755`** (title: *Bonsai*, public).
 
-Public link: https://banyan.vamitra.com/t/bnyn-ccb8a755
+Public link: https://banyan.vamitra.com/trunk/bnyn-ccb8a755
 
 **Always read it before making non-trivial changes.** If you're an AI agent
 with Banyan MCP tools available:

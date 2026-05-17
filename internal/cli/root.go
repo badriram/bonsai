@@ -10,7 +10,7 @@ func NewRootCommand() *cobra.Command {
 a production k3s cluster with Postgres and KV included.
 
 Developer verbs: grow, status, logs.
-Operator verbs (--advanced): bake-ami, rotate-workers, rotate-control,
+Operator verbs (--advanced): bake-image, rotate-workers, rotate-control,
 upgrade, destroy.`,
 	}
 	root.PersistentFlags().Bool("advanced", false, "show operator commands in help")
@@ -22,7 +22,7 @@ upgrade, destroy.`,
 	)
 
 	operator := []*cobra.Command{
-		newBakeAMICommand(),
+		newBakeImageCommand(),
 		newRotateWorkersCommand(),
 		newRotateControlCommand(),
 		newUpgradeCommand(),

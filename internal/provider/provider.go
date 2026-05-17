@@ -30,6 +30,13 @@ type PlatformProvider interface {
 	// internal/cluster/charts.go. Valid components:
 	//   cert-manager | cnpg | valkey | kured | system-upgrade-controller
 	UpgradeComponent(ctx context.Context, name, env, component string) error
+
+	// BakeImage produces a new node image with k3s pre-installed and returns
+	// the provider-native ID (AMI ID on AWS, Image ID on Hetzner, snapshot ID
+	// on DO). The image is tagged as the new "latest" so subsequent Provision
+	// + RotateWorkers calls pick it up. Account-wide / region-wide, not
+	// per-cluster.
+	BakeImage(ctx context.Context, k3sVersion string) (imageID string, err error)
 }
 
 // PlatformOutputs is the same shape on every provider — that's the point.

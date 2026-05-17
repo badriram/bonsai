@@ -54,7 +54,7 @@ enough; backups are namespaced by `<name>/<env>/`.
 |--------------|-----------------------------------------------------------|----------------|
 | Alpine pkgs  | `apk upgrade` systemd timer + `kured` for safe reboots    | Nightly        |
 | k3s          | `system-upgrade-controller` applies Plan CRD              | Manual / cron  |
-| AMI rebake   | `bonsai bake-ami` builds new image, tags `bonsai-node:latest` | Weekly cron |
+| Image rebake | `bonsai bake-image` builds new image, tags `bonsai-node:latest` | Weekly cron |
 | Worker roll  | `bonsai rotate-workers` ASG instance refresh              | Weekly cron    |
 | Control roll | `bonsai rotate-control` snapshot + replace                | Manual         |
 | CNPG/Valkey  | `bonsai upgrade --component <x>`                          | Manual         |
@@ -80,7 +80,7 @@ clusters:
 ## Operator commands
 
 ```sh
-bonsai bake-ami --advanced
+bonsai bake-image --advanced
 ```
 
 Spins up a temporary Alpine builder, installs k3s + containerd + the standard

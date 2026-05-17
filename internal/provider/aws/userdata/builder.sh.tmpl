@@ -1,0 +1,33 @@
+#!/bin/sh
+# AMI builder. Installs k3s binary + dependencies onto an Amazon Linux 2023
+# instance, then shuts down so CreateImage can snapshot a consistent disk.
+# Bonsai polls for the "stopped" state and proceeds.
+set -eu
+
+K3S_VERSION="{{.K3sVersion}}"
+
+# Pre-install aws-cli v2 (AL2023 ships it but pinning a known-good version
+# avoids surprises) and curl.
+dnf install -y awscli curl ca-certificates
+
+# Install k3s binaries but do NOT enable/start the service. Each cluster
+# launches with its own server/agent flags via user-data at boot time.
+curl -sfL https://get.k3s.io | \
+  INSTALL_K3S_VERSION="$K3S_VERSION" \
+  INSTALL_K3S_SKIP_ENABLE=true \
+  INSTALL_K3S_SKIP_START=true \
+  sh -
+
+# Pre-pull the rancher/k3s-upgrade image so the first system-upgrade-controller
+# Plan doesn't have to do it under cluster load. Best-effort.
+ctr image pull docker.io/rancher/k3s-upgrade:"$K3S_VERSION" || true
+
+# Modest hardening — keep this small and reviewable. Each line is intentional.
+echo 'net.ipv4.ip_forward=1'         >>/etc/sysctl.d/99-bonsai.conf
+echo 'net.bridge.bridge-nf-call-iptables=1' >>/etc/sysctl.d/99-bonsai.conf
+sysctl --system
+
+# Flush cloud-init logs and shut down. CreateImage proceeds once the instance
+# reports state=stopped.
+sync
+shutdown -h +1

@@ -8,21 +8,34 @@ import (
 
 // Operator-surface commands. Hidden from default help; surfaced with --advanced.
 
-func newBakeAMICommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "bake-ami",
-		Short: "Build a new Alpine + k3s AMI and tag it as bonsai-node:latest",
+func newBakeImageCommand() *cobra.Command {
+	var providerName, k3sVersion string
+	cmd := &cobra.Command{
+		Use:   "bake-image",
+		Short: "Build a new node image (AMI / snapshot) and tag it as bonsai-node:latest",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("not implemented in Phase 1 — wired in Phase 1.5")
+			p, err := selectProvider(cmd.Context(), providerName)
+			if err != nil {
+				return err
+			}
+			id, err := p.BakeImage(cmd.Context(), k3sVersion)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("baked %s — promoted to bonsai-node:latest\n", id)
+			return nil
 		},
 	}
+	cmd.Flags().StringVar(&providerName, "provider", "aws", "")
+	cmd.Flags().StringVar(&k3sVersion, "k3s", "", "k3s version to pre-install (default: pinned)")
+	return cmd
 }
 
 func newRotateWorkersCommand() *cobra.Command {
 	var name, env, ami, providerName string
 	cmd := &cobra.Command{
 		Use:   "rotate-workers",
-		Short: "Replace every worker node, rolling, with the latest (or specified) AMI",
+		Short: "Replace every worker node, rolling, with the latest (or specified) image",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			p, err := selectProvider(cmd.Context(), providerName)
 			if err != nil {
@@ -38,7 +51,7 @@ func newRotateWorkersCommand() *cobra.Command {
 	cmd.Flags().StringVar(&providerName, "provider", "aws", "")
 	cmd.Flags().StringVar(&name, "name", "", "")
 	cmd.Flags().StringVar(&env, "env", "dev", "")
-	cmd.Flags().StringVar(&ami, "ami", "latest", "")
+	cmd.Flags().StringVar(&ami, "image", "latest", "image reference: 'latest' or provider-native ID")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }

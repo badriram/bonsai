@@ -3,7 +3,9 @@ package hetzner
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -73,6 +75,68 @@ func runSSH(client *ssh.Client, cmd string) (string, error) {
 	defer sess.Close()
 	out, err := sess.CombinedOutput(cmd)
 	return string(out), err
+}
+
+// pullFile copies remotePath from the server to localPath via `cat` over an
+// SSH session. Good enough for ~100MB state tarballs without a dedicated SFTP
+// dep. Returns the byte count moved.
+func pullFile(client *ssh.Client, remotePath, localPath string) (int64, error) {
+	f, err := os.Create(localPath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		return 0, err
+	}
+	defer sess.Close()
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		return 0, err
+	}
+	if err := sess.Start("cat " + remotePath); err != nil {
+		return 0, err
+	}
+	n, copyErr := io.Copy(f, stdout)
+	if err := sess.Wait(); err != nil {
+		return n, err
+	}
+	return n, copyErr
+}
+
+// pushFile copies localPath onto the server at remotePath the same way.
+func pushFile(client *ssh.Client, localPath, remotePath string) (int64, error) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		return 0, err
+	}
+	defer sess.Close()
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		return 0, err
+	}
+	if err := sess.Start("cat > " + remotePath); err != nil {
+		return 0, err
+	}
+	n, copyErr := io.Copy(stdin, f)
+	stdin.Close()
+	if err := sess.Wait(); err != nil {
+		return n, err
+	}
+	if copyErr != nil {
+		return n, copyErr
+	}
+	return stat.Size(), nil
 }
 
 // waitForSSH polls until a TCP connect to :22 succeeds. Servers take ~30s to

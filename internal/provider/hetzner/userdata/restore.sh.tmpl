@@ -1,0 +1,11 @@
+#!/bin/sh
+# Restore cloud-init for Hetzner control-plane rotation. Does NOT install k3s.
+# Bonsai SSHs in after this finishes to push the snapshot and run the k3s
+# installer (which detects the restored state at /var/lib/rancher/k3s).
+set -eu
+
+apt-get update -y >/dev/null
+apt-get install -y curl ca-certificates >/dev/null
+
+mkdir -p /var/lib/rancher
+touch /var/lib/bonsai-restore-ready

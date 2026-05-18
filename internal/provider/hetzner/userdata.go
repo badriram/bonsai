@@ -28,6 +28,7 @@ type builderVars struct {
 func renderServerUserData(v serverVars) (string, error)   { return render("userdata/server.sh.tmpl", v) }
 func renderWorkerUserData(v workerVars) (string, error)   { return render("userdata/worker.sh.tmpl", v) }
 func renderBuilderUserData(v builderVars) (string, error) { return render("userdata/builder.sh.tmpl", v) }
+func renderRestoreUserData() (string, error)              { return render("userdata/restore.sh.tmpl", nil) }
 
 func render(path string, v any) (string, error) {
 	raw, err := userdataFS.ReadFile(path)

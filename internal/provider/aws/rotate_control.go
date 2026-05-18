@@ -53,7 +53,9 @@ func (p *Provider) RotateControl(ctx context.Context, name, env string) error {
 	if err != nil {
 		return err
 	}
-	net, err := p.ensureVPC(ctx, name, env)
+	// rotate-control here is the single-node EIP path; HA control rotation
+	// (PR #19) goes through ASG instance refresh and doesn't reuse this.
+	net, err := p.ensureVPC(ctx, name, env, false)
 	if err != nil {
 		return err
 	}

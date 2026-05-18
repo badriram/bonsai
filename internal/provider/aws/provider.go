@@ -9,6 +9,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
@@ -27,6 +28,7 @@ type Provider struct {
 	asg       *autoscaling.Client
 	iam       *iam.Client
 	ssm       *ssm.Client
+	elbv2     *elasticloadbalancingv2.Client
 	store     secrets.Store
 	envLookup func(string) string
 }
@@ -43,6 +45,7 @@ func New(ctx context.Context) (*Provider, error) {
 		asg:       autoscaling.NewFromConfig(cfg),
 		iam:       iam.NewFromConfig(cfg),
 		ssm:       ssmClient,
+		elbv2:     elasticloadbalancingv2.NewFromConfig(cfg),
 		store:     secrets.NewParameterStore(ssmClient),
 		envLookup: os.Getenv,
 	}, nil
@@ -51,9 +54,18 @@ func New(ctx context.Context) (*Provider, error) {
 // Provision is idempotent: every step looks up by tag, creates if missing,
 // updates if drifted. Safe to run from CI on every deploy.
 func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provider.PlatformOutputs, error) {
-	net, err := p.ensureVPC(ctx, cfg.Name, cfg.Env)
+	net, err := p.ensureVPC(ctx, cfg.Name, cfg.Env, cfg.HAControl)
 	if err != nil {
 		return provider.PlatformOutputs{}, err
+	}
+
+	// HA control plane: provision the NLB so Part 2 (control plane ASG) has a
+	// stable endpoint to register against. The control plane itself is still
+	// single-instance + EIP in this PR — Part 2 wires the ASG.
+	if cfg.HAControl {
+		if _, err := p.ensureControlNLB(ctx, cfg.Name, cfg.Env, net); err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("control NLB: %w", err)
+		}
 	}
 
 	backupBucket := "bonsai-backups-" + p.accountID()

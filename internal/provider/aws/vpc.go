@@ -20,20 +20,24 @@ import (
 
 const (
 	vpcCIDR      = "10.0.0.0/16"
-	subnetCIDR   = "10.0.1.0/24"
 	adminCIDREnv = "BONSAI_ADMIN_CIDR" // optional; gates 6443 + 22
 )
 
 type vpcInfra struct {
-	VPCID    string
-	SubnetID string
-	IGWID    string
-	SGServer string
-	SGWorker string
+	VPCID     string
+	SubnetIDs []string // length 1 for single-AZ, 3 for HA. SubnetIDs[0] is the primary.
+	IGWID     string
+	SGServer  string
+	SGWorker  string
 }
 
+// PrimarySubnet returns the subnet single-AZ code paths use.
+func (v vpcInfra) PrimarySubnet() string { return v.SubnetIDs[0] }
+
 // ensureVPC is idempotent: every step looks up by tag, creates if missing.
-func (p *Provider) ensureVPC(ctx context.Context, name, env string) (vpcInfra, error) {
+// When haControl is true, three subnets are created spread across distinct
+// AZs so a 3-node etcd control plane can survive an AZ failure.
+func (p *Provider) ensureVPC(ctx context.Context, name, env string, haControl bool) (vpcInfra, error) {
 	vpcID, err := p.ensureVPCResource(ctx, name, env)
 	if err != nil {
 		return vpcInfra{}, fmt.Errorf("ensure vpc: %w", err)
@@ -42,18 +46,22 @@ func (p *Provider) ensureVPC(ctx context.Context, name, env string) (vpcInfra, e
 	if err != nil {
 		return vpcInfra{}, fmt.Errorf("ensure igw: %w", err)
 	}
-	subnetID, err := p.ensureSubnet(ctx, name, env, vpcID)
-	if err != nil {
-		return vpcInfra{}, fmt.Errorf("ensure subnet: %w", err)
+	azCount := 1
+	if haControl {
+		azCount = 3
 	}
-	if err := p.ensureRouteTable(ctx, name, env, vpcID, subnetID, igwID); err != nil {
+	subnetIDs, err := p.ensureSubnets(ctx, name, env, vpcID, azCount)
+	if err != nil {
+		return vpcInfra{}, fmt.Errorf("ensure subnets: %w", err)
+	}
+	if err := p.ensureRouteTable(ctx, name, env, vpcID, subnetIDs, igwID); err != nil {
 		return vpcInfra{}, fmt.Errorf("ensure route table: %w", err)
 	}
 	sgServer, sgWorker, err := p.ensureSecurityGroups(ctx, name, env, vpcID)
 	if err != nil {
 		return vpcInfra{}, fmt.Errorf("ensure security groups: %w", err)
 	}
-	return vpcInfra{VPCID: vpcID, SubnetID: subnetID, IGWID: igwID, SGServer: sgServer, SGWorker: sgWorker}, nil
+	return vpcInfra{VPCID: vpcID, SubnetIDs: subnetIDs, IGWID: igwID, SGServer: sgServer, SGWorker: sgWorker}, nil
 }
 
 func (p *Provider) ensureVPCResource(ctx context.Context, name, env string) (string, error) {
@@ -115,42 +123,56 @@ func (p *Provider) ensureInternetGateway(ctx context.Context, name, env, vpcID s
 	return igwID, nil
 }
 
-func (p *Provider) ensureSubnet(ctx context.Context, name, env, vpcID string) (string, error) {
-	out, err := p.ec2.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{Filters: roleFilters(name, env, "subnet")})
+// ensureSubnets returns N subnet IDs, one per distinct AZ. Existing subnets
+// are reused; missing AZs get a fresh /24 from the VPC's 10.0.x.0/24 space
+// (deterministic by AZ index so the same AZ always gets the same CIDR).
+func (p *Provider) ensureSubnets(ctx context.Context, name, env, vpcID string, n int) ([]string, error) {
+	existing, err := p.ec2.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{Filters: roleFilters(name, env, "subnet")})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if len(out.Subnets) > 0 {
-		return aws.ToString(out.Subnets[0].SubnetId), nil
+	have := map[string]string{} // az → subnet ID
+	for _, s := range existing.Subnets {
+		have[aws.ToString(s.AvailabilityZone)] = aws.ToString(s.SubnetId)
 	}
-	// Pick the first AZ in the region — Phase 1 is single-AZ; Phase 3 spreads
-	// the HA control plane across three.
+
 	azs, err := p.ec2.DescribeAvailabilityZones(ctx, &ec2.DescribeAvailabilityZonesInput{})
-	if err != nil || len(azs.AvailabilityZones) == 0 {
-		return "", fmt.Errorf("no availability zones: %w", err)
+	if err != nil || len(azs.AvailabilityZones) < n {
+		return nil, fmt.Errorf("need %d AZs, region has %d: %w", n, len(azs.AvailabilityZones), err)
 	}
-	created, err := p.ec2.CreateSubnet(ctx, &ec2.CreateSubnetInput{
-		VpcId:             aws.String(vpcID),
-		CidrBlock:         aws.String(subnetCIDR),
-		AvailabilityZone:  azs.AvailabilityZones[0].ZoneName,
-		TagSpecifications: []ec2types.TagSpecification{tagSpec(ec2types.ResourceTypeSubnet, name, env, "subnet")},
-	})
-	if err != nil {
-		return "", err
+
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		az := aws.ToString(azs.AvailabilityZones[i].ZoneName)
+		if id, ok := have[az]; ok {
+			ids = append(ids, id)
+			continue
+		}
+		cidr := fmt.Sprintf("10.0.%d.0/24", i+1)
+		created, err := p.ec2.CreateSubnet(ctx, &ec2.CreateSubnetInput{
+			VpcId:             aws.String(vpcID),
+			CidrBlock:         aws.String(cidr),
+			AvailabilityZone:  aws.String(az),
+			TagSpecifications: []ec2types.TagSpecification{tagSpec(ec2types.ResourceTypeSubnet, name, env, "subnet")},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create subnet in %s: %w", az, err)
+		}
+		id := aws.ToString(created.Subnet.SubnetId)
+		// Auto-assign public IPs — workers and control plane both live in these
+		// subnets and need direct internet egress without a NAT.
+		if _, err := p.ec2.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
+			SubnetId:            aws.String(id),
+			MapPublicIpOnLaunch: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
+		}); err != nil {
+			return nil, fmt.Errorf("enable public IP on %s: %w", id, err)
+		}
+		ids = append(ids, id)
 	}
-	subnetID := aws.ToString(created.Subnet.SubnetId)
-	// Auto-assign public IPs — workers and control plane both live in this subnet
-	// and need direct internet egress without a NAT.
-	if _, err := p.ec2.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
-		SubnetId:            aws.String(subnetID),
-		MapPublicIpOnLaunch: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
-	}); err != nil {
-		return "", fmt.Errorf("enable public IP: %w", err)
-	}
-	return subnetID, nil
+	return ids, nil
 }
 
-func (p *Provider) ensureRouteTable(ctx context.Context, name, env, vpcID, subnetID, igwID string) error {
+func (p *Provider) ensureRouteTable(ctx context.Context, name, env, vpcID string, subnetIDs []string, igwID string) error {
 	out, err := p.ec2.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{Filters: roleFilters(name, env, "rtb")})
 	if err != nil {
 		return err
@@ -176,10 +198,12 @@ func (p *Provider) ensureRouteTable(ctx context.Context, name, env, vpcID, subne
 	}); err != nil && !isAlreadyExists(err) {
 		return fmt.Errorf("create default route: %w", err)
 	}
-	if _, err := p.ec2.AssociateRouteTable(ctx, &ec2.AssociateRouteTableInput{
-		RouteTableId: aws.String(rtbID), SubnetId: aws.String(subnetID),
-	}); err != nil && !isAlreadyExists(err) {
-		return fmt.Errorf("associate route table: %w", err)
+	for _, subnetID := range subnetIDs {
+		if _, err := p.ec2.AssociateRouteTable(ctx, &ec2.AssociateRouteTableInput{
+			RouteTableId: aws.String(rtbID), SubnetId: aws.String(subnetID),
+		}); err != nil && !isAlreadyExists(err) {
+			return fmt.Errorf("associate route table to %s: %w", subnetID, err)
+		}
 	}
 	return nil
 }

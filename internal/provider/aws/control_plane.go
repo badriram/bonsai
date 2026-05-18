@@ -60,7 +60,7 @@ func (p *Provider) launchControlPlane(ctx context.Context, spec controlPlaneSpec
 		InstanceType:       ec2types.InstanceType(defaultControlPlaneInstanceType),
 		MinCount:           aws.Int32(1),
 		MaxCount:           aws.Int32(1),
-		SubnetId:           aws.String(spec.Net.SubnetID),
+		SubnetId:           aws.String(spec.Net.PrimarySubnet()),
 		SecurityGroupIds:   []string{spec.Net.SGServer},
 		IamInstanceProfile: &ec2types.IamInstanceProfileSpecification{Name: aws.String(spec.InstanceProfile)},
 		UserData:           aws.String(userData),

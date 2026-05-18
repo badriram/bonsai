@@ -51,4 +51,8 @@ The consuming app's CI only ever runs `bonsai grow` + `kubectl apply`. Updates a
 
 ## Status
 
-Phase 1 in progress — AWS provider, single control plane, ASG workers, Tier 1 capabilities.
+Phase 1 (AWS) + Phase 2 (Hetzner) complete. Phase 3 (HA control plane on
+AWS) in progress — Part 1 (multi-AZ + NLB scaffolding) shipped; Part 2
+(3-node etcd ASG) next.
+
+See [`ROADMAP.md`](ROADMAP.md) for the full plan and the next item to pick up.

@@ -37,6 +37,7 @@ func newGrowCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Env, "env", "dev", "environment")
 	cmd.Flags().IntVar(&cfg.Workers, "workers", 1, "initial worker count")
 	cmd.Flags().StringVar(&cfg.Region, "region", "us-east-1", "cloud region")
+	cmd.Flags().BoolVar(&cfg.HAControl, "ha-control", false, "3-node embedded-etcd control plane across multiple AZs (~$60/mo extra)")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }

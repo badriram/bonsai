@@ -30,6 +30,7 @@ func (p *Provider) Destroy(ctx context.Context, name, env string) error {
 		{"asg", func() error { return p.destroyASG(ctx, name, env) }},
 		{"launch-template", func() error { return p.destroyLaunchTemplate(ctx, name, env) }},
 		{"control-plane", func() error { return p.destroyControlPlane(ctx, name, env) }},
+		{"control-nlb", func() error { return p.destroyControlNLB(ctx, name, env) }},
 		{"control-eip", func() error { return p.releaseControlEIP(ctx, name, env) }},
 		{"iam", func() error { return p.destroyIAM(ctx, name, env) }},
 		{"security-groups", func() error { return p.destroySecurityGroups(ctx, name, env) }},

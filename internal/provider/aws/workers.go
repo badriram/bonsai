@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
@@ -26,7 +27,9 @@ func (p *Provider) ensureWorkers(ctx context.Context, name, env string, desired 
 	if err != nil {
 		return fmt.Errorf("launch template: %w", err)
 	}
-	return p.ensureASG(ctx, name, env, ltID, ltVersion, desired, net.SubnetID)
+	// ASG VPCZoneIdentifier accepts a comma-separated list — when HA is enabled
+	// the workers spread across all available subnets/AZs for free.
+	return p.ensureASG(ctx, name, env, ltID, ltVersion, desired, strings.Join(net.SubnetIDs, ","))
 }
 
 func (p *Provider) ensureLaunchTemplate(ctx context.Context, name, env string, net vpcInfra, instanceProfile, controlPlaneURL string) (id string, version string, err error) {

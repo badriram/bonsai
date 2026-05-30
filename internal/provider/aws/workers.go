@@ -19,7 +19,7 @@ import (
 // refresh against a new launch template version (see rotate.go).
 
 const (
-	defaultWorkerInstanceType = "t3.small"
+	defaultWorkerInstanceType = "t4g.small"
 )
 
 func (p *Provider) ensureWorkers(ctx context.Context, name, env string, desired int32, net vpcInfra, instanceProfile, controlPlaneURL string) error {

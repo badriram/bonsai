@@ -15,7 +15,7 @@ import (
 // Resolution order:
 //   1. An AMI tagged bonsai-node:latest=true that this account owns
 //      (produced by `bonsai bake-image`).
-//   2. Latest Amazon Linux 2023 x86_64 from Amazon's public AMIs.
+//   2. Latest Amazon Linux 2023 arm64 from Amazon's public AMIs.
 //
 // AL2023 is the fallback for accounts that haven't baked an image yet —
 // aws-cli v2 ships with it and the k3s install script works out of the box.
@@ -53,8 +53,8 @@ func (p *Provider) latestAmazonLinux(ctx context.Context) (string, error) {
 	out, err := p.ec2.DescribeImages(ctx, &ec2.DescribeImagesInput{
 		Owners: []string{"amazon"},
 		Filters: []ec2types.Filter{
-			{Name: aws.String("name"), Values: []string{"al2023-ami-2023.*-kernel-6.*-x86_64"}},
-			{Name: aws.String("architecture"), Values: []string{"x86_64"}},
+			{Name: aws.String("name"), Values: []string{"al2023-ami-2023.*-kernel-6.*-arm64"}},
+			{Name: aws.String("architecture"), Values: []string{"arm64"}},
 			{Name: aws.String("state"), Values: []string{"available"}},
 		},
 	})

@@ -23,7 +23,7 @@ import (
 // instance is already running.
 const (
 	defaultK3sBakeVersion = "v1.31.0+k3s1"
-	builderInstanceType   = "t3.small"
+	builderInstanceType   = "t4g.small"
 	bakeAMITagLatest      = "bonsai-node:latest"
 	bakeAMITagK3sVersion  = "bonsai-node:k3s-version"
 	bakeAMITagBuiltAt     = "bonsai-node:built-at"

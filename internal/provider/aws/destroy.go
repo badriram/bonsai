@@ -297,11 +297,34 @@ func (p *Provider) destroySubnet(ctx context.Context, name, env string) error {
 		return err
 	}
 	for _, s := range out.Subnets {
-		if _, err := p.ec2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{SubnetId: s.SubnetId}); err != nil && !isNotFound(err) {
-			return fmt.Errorf("delete subnet %s: %w", aws.ToString(s.SubnetId), err)
+		// NLB deletion is async — its ENIs in the subnet can take 30-60s to
+		// detach. Subnet delete returns DependencyViolation in that window.
+		// Retry for up to 90s before giving up.
+		deadline := time.Now().Add(90 * time.Second)
+		for {
+			_, err := p.ec2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{SubnetId: s.SubnetId})
+			if err == nil || isNotFound(err) {
+				break
+			}
+			if !isDependencyViolation(err) || time.Now().After(deadline) {
+				return fmt.Errorf("delete subnet %s: %w", aws.ToString(s.SubnetId), err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(10 * time.Second):
+			}
 		}
 	}
 	return nil
+}
+
+func isDependencyViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr interface{ ErrorCode() string }
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "DependencyViolation"
 }
 
 func (p *Provider) destroyIGW(ctx context.Context, name, env string) error {

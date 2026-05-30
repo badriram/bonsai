@@ -15,6 +15,10 @@ type serverVars struct {
 	Name, Env, Region, ControlIP, BackupBucket string
 }
 
+type serverHAVars struct {
+	Name, Env, Region, NLBDNS, BackupBucket string
+}
+
 type workerVars struct {
 	Name, Env, Region, ControlPlaneURL string
 }
@@ -25,6 +29,10 @@ type builderVars struct {
 
 func renderServerUserData(v serverVars) (string, error) {
 	return renderUserData("userdata/server.sh.tmpl", v)
+}
+
+func renderServerHAUserData(v serverHAVars) (string, error) {
+	return renderUserData("userdata/server-ha.sh.tmpl", v)
 }
 
 func renderWorkerUserData(v workerVars) (string, error) {

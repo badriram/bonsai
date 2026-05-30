@@ -29,6 +29,8 @@ func (p *Provider) Destroy(ctx context.Context, name, env string) error {
 	}{
 		{"asg", func() error { return p.destroyASG(ctx, name, env) }},
 		{"launch-template", func() error { return p.destroyLaunchTemplate(ctx, name, env) }},
+		{"control-asg", func() error { return p.destroyControlPlaneASG(ctx, name, env) }},
+		{"control-launch-template", func() error { return p.destroyControlPlaneLT(ctx, name, env) }},
 		{"control-plane", func() error { return p.destroyControlPlane(ctx, name, env) }},
 		{"control-nlb", func() error { return p.destroyControlNLB(ctx, name, env) }},
 		{"control-eip", func() error { return p.releaseControlEIP(ctx, name, env) }},
@@ -89,6 +91,36 @@ func (p *Provider) waitForASGGone(ctx context.Context, asgName string) error {
 		}
 	}
 	return fmt.Errorf("asg %s did not delete within 10m", asgName)
+}
+
+func (p *Provider) destroyControlPlaneASG(ctx context.Context, name, env string) error {
+	asgName := haControlPlaneASGName(name, env)
+	out, err := p.asg.DescribeAutoScalingGroups(ctx, &autoscaling.DescribeAutoScalingGroupsInput{
+		AutoScalingGroupNames: []string{asgName},
+	})
+	if err != nil {
+		return err
+	}
+	if len(out.AutoScalingGroups) == 0 {
+		return nil
+	}
+	if _, err := p.asg.DeleteAutoScalingGroup(ctx, &autoscaling.DeleteAutoScalingGroupInput{
+		AutoScalingGroupName: aws.String(asgName),
+		ForceDelete:          aws.Bool(true),
+	}); err != nil {
+		return err
+	}
+	return p.waitForASGGone(ctx, asgName)
+}
+
+func (p *Provider) destroyControlPlaneLT(ctx context.Context, name, env string) error {
+	_, err := p.ec2.DeleteLaunchTemplate(ctx, &ec2.DeleteLaunchTemplateInput{
+		LaunchTemplateName: aws.String(haControlPlaneLTName(name, env)),
+	})
+	if err != nil && !isNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 func (p *Provider) destroyLaunchTemplate(ctx context.Context, name, env string) error {

@@ -59,15 +59,6 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		return provider.PlatformOutputs{}, err
 	}
 
-	// HA control plane: provision the NLB so Part 2 (control plane ASG) has a
-	// stable endpoint to register against. The control plane itself is still
-	// single-instance + EIP in this PR — Part 2 wires the ASG.
-	if cfg.HAControl {
-		if _, err := p.ensureControlNLB(ctx, cfg.Name, cfg.Env, net); err != nil {
-			return provider.PlatformOutputs{}, fmt.Errorf("control NLB: %w", err)
-		}
-	}
-
 	backupBucket := "bonsai-backups-" + p.accountID()
 	instanceProfile, err := p.ensureIAM(ctx, cfg.Name, cfg.Env, backupBucket)
 	if err != nil {
@@ -78,25 +69,43 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		return provider.PlatformOutputs{}, err
 	}
 
-	eip, err := p.ensureControlEIP(ctx, cfg.Name, cfg.Env)
-	if err != nil {
-		return provider.PlatformOutputs{}, err
+	var controlURL string
+	if cfg.HAControl {
+		nlb, err := p.ensureControlNLB(ctx, cfg.Name, cfg.Env, net)
+		if err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("control NLB: %w", err)
+		}
+		if err := p.ensureControlPlaneASG(ctx, controlPlaneHASpec{
+			Name: cfg.Name, Env: cfg.Env,
+			Net:             net,
+			InstanceProfile: instanceProfile,
+			NLBDNS:          nlb.DNSName,
+			TargetGroupArn:  nlb.TargetGroupArn,
+			BackupBucket:    backupBucket,
+		}); err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("control plane ASG: %w", err)
+		}
+		controlURL = "https://" + nlb.DNSName + ":6443"
+	} else {
+		eip, err := p.ensureControlEIP(ctx, cfg.Name, cfg.Env)
+		if err != nil {
+			return provider.PlatformOutputs{}, err
+		}
+		controlInstanceID, err := p.ensureControlPlane(ctx, controlPlaneSpec{
+			Name: cfg.Name, Env: cfg.Env,
+			Net:             net,
+			InstanceProfile: instanceProfile,
+			ControlIP:       eip.PublicIP,
+			BackupBucket:    backupBucket,
+		})
+		if err != nil {
+			return provider.PlatformOutputs{}, err
+		}
+		if err := p.associateControlEIP(ctx, eip, controlInstanceID); err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("associate control EIP: %w", err)
+		}
+		controlURL = "https://" + eip.PublicIP + ":6443"
 	}
-
-	controlInstanceID, err := p.ensureControlPlane(ctx, controlPlaneSpec{
-		Name: cfg.Name, Env: cfg.Env,
-		Net:             net,
-		InstanceProfile: instanceProfile,
-		ControlIP:       eip.PublicIP,
-		BackupBucket:    backupBucket,
-	})
-	if err != nil {
-		return provider.PlatformOutputs{}, err
-	}
-	if err := p.associateControlEIP(ctx, eip, controlInstanceID); err != nil {
-		return provider.PlatformOutputs{}, fmt.Errorf("associate control EIP: %w", err)
-	}
-	controlURL := "https://" + eip.PublicIP + ":6443"
 
 	if err := p.waitForK3sReady(ctx, cfg.Name, cfg.Env); err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("control plane never became ready: %w", err)

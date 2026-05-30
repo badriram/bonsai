@@ -188,6 +188,90 @@ bonsai rotate-control --advanced --provider <PROVIDER> --name $NAME --env $ENV
 `Ready` after the new control plane comes up. CNPG cluster reconciles
 (may show `pg_isready` blips in logs during the API outage).
 
+## Phase 2.5: HA control plane (AWS only)
+
+Skip if you're not testing `--ha-control`. Runs after a clean destroy of the
+single-node cluster (or in a fresh `NAME`/`ENV` to avoid the EIP→NLB
+switchover edge case).
+
+### H1. `grow --ha-control` — fresh HA provision
+
+```sh
+bonsai grow --provider aws --name $NAME --env $ENV --workers 2 --ha-control
+```
+
+**What's different from step 1:**
+- VPC now has 3 subnets, one per AZ (`describe-subnets` confirms).
+- Internet-facing NLB on TCP:6443 (`describe-load-balancers`).
+- Control plane is a 3-instance ASG named `bonsai-$NAME-$ENV-control`, not
+  a single EC2 with an EIP.
+- `CLUSTER_ENDPOINT` is the NLB DNS, not a raw IP.
+
+**Expected timing:** 10–14 minutes (3 control nodes need to elect + join via
+SSM-lock before workers see a healthy API).
+
+**Watch for cluster-init race:**
+- One control instance wins `/bonsai/$NAME/$ENV/etcd-init-leader` —
+  `aws ssm get-parameter --name /bonsai/$NAME/$ENV/etcd-init-leader`
+  shows that instance ID. The other two should NOT have run `--cluster-init`
+  (check `journalctl -u k3s` on each via SSM Session Manager — they should
+  show `--server https://...:6443` in the args).
+
+### H2. Cluster sees 3 control nodes
+
+```sh
+aws ssm get-parameter --name /bonsai/$NAME/$ENV/kubeconfig --with-decryption \
+  --query Parameter.Value --output text > /tmp/kc-ha
+KUBECONFIG=/tmp/kc-ha kubectl get nodes
+```
+
+**Expected:** 3 `control-plane,etcd,master` nodes + 2 workers, all `Ready`.
+
+### H3. Kill a control node — API survives
+
+```sh
+# Terminate one control instance; ASG replaces it
+aws ec2 describe-instances \
+  --filters Name=tag:bonsai:cluster,Values=$NAME Name=tag:bonsai:role,Values=control-plane Name=instance-state-name,Values=running \
+  --query 'Reservations[].Instances[0].InstanceId' --output text | head -1 | \
+  xargs -I {} aws ec2 terminate-instances --instance-ids {}
+
+# kubectl should keep responding throughout
+while sleep 5; do KUBECONFIG=/tmp/kc-ha kubectl get nodes -o name; echo "---"; done
+```
+
+**Expected:** kubectl never errors out. The terminated node disappears from
+`kubectl get nodes`, the ASG launches a replacement (~3 min), and it rejoins
+as a fresh etcd member (the SSM-lock is held, so it takes the `--server`
+join path).
+
+### H4. `rotate-control` — rolling instance refresh, zero API downtime
+
+```sh
+bonsai bake-image --provider aws  # produce a fresh AMI
+bonsai rotate-control --advanced --provider aws --name $NAME --env $ENV
+```
+
+**Expected:** triggers an ASG instance refresh with
+`MinHealthyPercentage=67` so 2 of 3 stay up at all times. Watch:
+
+```sh
+aws autoscaling describe-instance-refreshes \
+  --auto-scaling-group-name bonsai-$NAME-$ENV-control
+```
+
+API stays available the whole time (etcd quorum = 2 of 3).
+
+### H5. Destroy
+
+`bonsai destroy --advanced` already handles the HA path. Verify cleanup
+also covers:
+- `aws elbv2 describe-load-balancers` — no `bonsai-$NAME-$ENV` NLB
+- `aws autoscaling describe-auto-scaling-groups` — no
+  `bonsai-$NAME-$ENV-control` ASG
+- `aws ec2 describe-launch-templates` — no `bonsai-$NAME-$ENV-control` LT
+- All 3 subnets gone.
+
 ## Phase 3: teardown
 
 ### 12. `destroy`

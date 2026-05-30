@@ -219,15 +219,23 @@ func (p *Provider) ensureSecurityGroups(ctx context.Context, name, env, vpcID st
 	}
 
 	adminCIDR := p.adminCIDR()
-	// Server ingress: 6443 from workers + admin; 10250 intra-cluster.
+	// Server ingress: 6443 from workers + admin; 10250 intra-cluster; etcd
+	// peer/client ports intra-server only; flannel VXLAN for pod traffic.
 	rules := []ec2types.IpPermission{
 		intraSG(6443, 6443, server),
 		intraSG(6443, 6443, worker),
 		intraSG(10250, 10250, server),
 		intraSG(10250, 10250, worker),
+		// etcd client (2379) + peer (2380) — required for HA embedded etcd
+		// quorum across the 3 control plane nodes.
+		intraSG(2379, 2380, server),
 		// flannel VXLAN for inter-node pod traffic
 		intraSG(8472, 8472, server),
 		intraSG(8472, 8472, worker),
+		// NLB ENIs aren't in any SG; target health checks come from VPC IPs,
+		// so allow 6443 from the VPC CIDR. Same-VPC clients are already
+		// implicitly trusted; this just makes NLB health checks pass.
+		cidrRule(6443, 6443, vpcCIDR),
 	}
 	if adminCIDR != "" {
 		rules = append(rules, cidrRule(6443, 6443, adminCIDR), cidrRule(22, 22, adminCIDR))

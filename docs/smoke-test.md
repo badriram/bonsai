@@ -272,6 +272,61 @@ also covers:
 - `aws ec2 describe-launch-templates` — no `bonsai-$NAME-$ENV-control` LT
 - All 3 subnets gone.
 
+## Phase 2.6: HA + tailnet (BYO headscale/tailscale)
+
+Skip if not testing tailnet mode. Operator-supplied tailnet replaces the
+NLB and admin-CIDR machinery entirely.
+
+### Prerequisites
+
+- A headscale instance OR Tailscale Cloud account.
+- A pre-auth key stored in SSM under a path you control. Example:
+  ```sh
+  aws ssm put-parameter --name /myorg/secrets/tailnet-key \
+    --type SecureString --value 'tskey-auth-...'
+  ```
+
+### T1. `grow --ha-control` with tailnet flags
+
+```sh
+bonsai grow --provider aws --name $NAME --env $ENV --workers 2 \
+  --ha-control \
+  --tailnet-url=https://headscale.example.com \
+  --tailnet-key-ssm=/myorg/secrets/tailnet-key
+```
+
+**What's different from H1:**
+- No NLB provisioned (~$53/mo saved).
+- No `BONSAI_ADMIN_CIDR` SG rules — public 6443 is closed.
+- Each control plane + worker installs tailscale on boot and joins your
+  tailnet. The leader publishes its tailnet IP to
+  `/bonsai/$NAME/$ENV/control-tailnet-ip`; joiners + workers read it.
+- Kubeconfig server URL is the leader's tailnet IP.
+
+### T2. kubectl from anywhere on the tailnet
+
+```sh
+aws ssm get-parameter --name /bonsai/$NAME/$ENV/kubeconfig --with-decryption \
+  --query Parameter.Value --output text > /tmp/kc-tn
+KUBECONFIG=/tmp/kc-tn kubectl get nodes
+```
+
+Your laptop just needs to be on the tailnet (`tailscale up` on the same
+network). No SG holes, no IP staleness, no NLB.
+
+### T3. Verify in your tailnet UI
+
+Headscale: `headscale nodes list` — should show 3 `bonsai-$NAME-$ENV-*`
+control plane entries + 2 worker entries.
+
+### T4. Destroy
+
+`bonsai destroy --advanced` works the same — terminates the ASG and ALL
+the rest. Note: instances die without `tailscale logout`, so ghost
+machines will linger in headscale until you prune them
+(`headscale nodes expire $node_id`). Bonsai doesn't manage tailnet
+membership lifecycle in v1.
+
 ## Phase 3: teardown
 
 ### 12. `destroy`

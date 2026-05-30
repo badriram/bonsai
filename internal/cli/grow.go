@@ -38,6 +38,8 @@ func newGrowCommand() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.Workers, "workers", 1, "initial worker count")
 	cmd.Flags().StringVar(&cfg.Region, "region", "us-east-1", "cloud region")
 	cmd.Flags().BoolVar(&cfg.HAControl, "ha-control", false, "3-node embedded-etcd control plane across multiple AZs (~$60/mo extra)")
+	cmd.Flags().StringVar(&cfg.TailnetURL, "tailnet-url", "", "headscale/tailscale login server URL — nodes join your tailnet on boot, no NLB/admin-CIDR (requires --tailnet-key-ssm)")
+	cmd.Flags().StringVar(&cfg.TailnetKeySSMPath, "tailnet-key-ssm", "", "SSM parameter path holding a pre-auth key for the tailnet")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }

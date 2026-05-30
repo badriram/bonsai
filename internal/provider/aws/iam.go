@@ -20,12 +20,12 @@ import (
 //
 // IAM doesn't have AWS-tag-based lookup in the same way EC2 does, so we use a
 // deterministic name (bonsai-<name>-<env>) and treat NoSuchEntity as "create".
-func (p *Provider) ensureIAM(ctx context.Context, name, env, backupBucket string) (instanceProfileName string, err error) {
+func (p *Provider) ensureIAM(ctx context.Context, name, env, backupBucket string, extraSSMReadPaths ...string) (instanceProfileName string, err error) {
 	roleName := iamName(name, env)
 	if err := p.ensureRole(ctx, roleName, name, env); err != nil {
 		return "", fmt.Errorf("ensure role: %w", err)
 	}
-	if err := p.putInlinePolicy(ctx, roleName, "ssm", ssmPolicy(name, env)); err != nil {
+	if err := p.putInlinePolicy(ctx, roleName, "ssm", ssmPolicy(name, env, extraSSMReadPaths...)); err != nil {
 		return "", fmt.Errorf("ssm policy: %w", err)
 	}
 	if err := p.putInlinePolicy(ctx, roleName, "s3-backup", s3Policy(name, env, backupBucket)); err != nil {
@@ -117,16 +117,25 @@ const ec2AssumeRolePolicy = `{
   }]
 }`
 
-func ssmPolicy(name, env string) string {
+func ssmPolicy(name, env string, extraReadPaths ...string) string {
 	prefix := "/bonsai/" + name + "/" + env + "/*"
+	statements := []any{
+		map[string]any{
+			"Effect":   "Allow",
+			"Action":   []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:PutParameter"},
+			"Resource": "arn:aws:ssm:*:*:parameter" + prefix,
+		},
+	}
+	for _, path := range extraReadPaths {
+		statements = append(statements, map[string]any{
+			"Effect":   "Allow",
+			"Action":   []string{"ssm:GetParameter"},
+			"Resource": "arn:aws:ssm:*:*:parameter" + path,
+		})
+	}
 	doc := map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []any{
-			map[string]any{
-				"Effect":   "Allow",
-				"Action":   []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:PutParameter"},
-				"Resource": "arn:aws:ssm:*:*:parameter" + prefix,
-			},
+		"Version":   "2012-10-17",
+		"Statement": append(statements,
 			map[string]any{
 				// Decrypt SecureString values written under the cluster prefix.
 				"Effect":   "Allow",
@@ -136,7 +145,7 @@ func ssmPolicy(name, env string) string {
 					"StringEquals": map[string]any{"kms:ViaService": "ssm.*.amazonaws.com"},
 				},
 			},
-		},
+		),
 	}
 	b, _ := json.Marshal(doc)
 	return string(b)

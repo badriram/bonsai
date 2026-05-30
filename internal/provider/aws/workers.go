@@ -22,8 +22,21 @@ const (
 	defaultWorkerInstanceType = "t4g.small"
 )
 
-func (p *Provider) ensureWorkers(ctx context.Context, name, env string, desired int32, net vpcInfra, instanceProfile, controlPlaneURL string) error {
-	ltID, ltVersion, err := p.ensureLaunchTemplate(ctx, name, env, net, instanceProfile, controlPlaneURL)
+// workerOpts carries the optional knobs ensureWorkers cares about. controlPlaneURL
+// is the NLB DNS or EIP URL the worker uses to find the API. In tailnet mode it's
+// ignored — the worker reads the control plane's tailnet IP from SSM at boot.
+type workerOpts struct {
+	ControlPlaneURL   string
+	TailnetURL        string
+	TailnetKeySSMPath string
+}
+
+func (o workerOpts) tailnetMode() bool {
+	return o.TailnetURL != "" && o.TailnetKeySSMPath != ""
+}
+
+func (p *Provider) ensureWorkers(ctx context.Context, name, env string, desired int32, net vpcInfra, instanceProfile string, opts workerOpts) error {
+	ltID, ltVersion, err := p.ensureLaunchTemplate(ctx, name, env, net, instanceProfile, opts)
 	if err != nil {
 		return fmt.Errorf("launch template: %w", err)
 	}
@@ -32,15 +45,23 @@ func (p *Provider) ensureWorkers(ctx context.Context, name, env string, desired 
 	return p.ensureASG(ctx, name, env, ltID, ltVersion, desired, strings.Join(net.SubnetIDs, ","))
 }
 
-func (p *Provider) ensureLaunchTemplate(ctx context.Context, name, env string, net vpcInfra, instanceProfile, controlPlaneURL string) (id string, version string, err error) {
+func (p *Provider) ensureLaunchTemplate(ctx context.Context, name, env string, net vpcInfra, instanceProfile string, opts workerOpts) (id string, version string, err error) {
 	ltName := "bonsai-" + name + "-" + env + "-worker"
 	amiID, err := p.resolveNodeAMI(ctx)
 	if err != nil {
 		return "", "", err
 	}
-	userData, err := renderWorkerUserData(workerVars{
-		Name: name, Env: env, Region: p.awsCfg.Region, ControlPlaneURL: controlPlaneURL,
-	})
+	var userData string
+	if opts.tailnetMode() {
+		userData, err = renderWorkerTailnetUserData(workerTailnetVars{
+			Name: name, Env: env, Region: p.awsCfg.Region,
+			TailnetURL: opts.TailnetURL, TailnetKeySSMPath: opts.TailnetKeySSMPath,
+		})
+	} else {
+		userData, err = renderWorkerUserData(workerVars{
+			Name: name, Env: env, Region: p.awsCfg.Region, ControlPlaneURL: opts.ControlPlaneURL,
+		})
+	}
 	if err != nil {
 		return "", "", err
 	}
@@ -53,6 +74,11 @@ func (p *Provider) ensureLaunchTemplate(ctx context.Context, name, env string, n
 			Name: aws.String(instanceProfile),
 		},
 		UserData: aws.String(userData),
+		MetadataOptions: &ec2types.LaunchTemplateInstanceMetadataOptionsRequest{
+			HttpTokens:              ec2types.LaunchTemplateHttpTokensStateRequired,
+			HttpPutResponseHopLimit: aws.Int32(2),
+			HttpEndpoint:            ec2types.LaunchTemplateInstanceMetadataEndpointStateEnabled,
+		},
 		TagSpecifications: []ec2types.LaunchTemplateTagSpecificationRequest{
 			{ResourceType: ec2types.ResourceTypeInstance, Tags: clusterTags(name, env, "worker")},
 		},

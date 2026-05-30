@@ -19,6 +19,14 @@ type serverHAVars struct {
 	Name, Env, Region, NLBDNS, BackupBucket string
 }
 
+type serverTailnetHAVars struct {
+	Name, Env, Region, TailnetURL, TailnetKeySSMPath string
+}
+
+type workerTailnetVars struct {
+	Name, Env, Region, TailnetURL, TailnetKeySSMPath string
+}
+
 type workerVars struct {
 	Name, Env, Region, ControlPlaneURL string
 }
@@ -33,6 +41,14 @@ func renderServerUserData(v serverVars) (string, error) {
 
 func renderServerHAUserData(v serverHAVars) (string, error) {
 	return renderUserData("userdata/server-ha.sh.tmpl", v)
+}
+
+func renderServerTailnetHAUserData(v serverTailnetHAVars) (string, error) {
+	return renderUserData("userdata/server-tailnet-ha.sh.tmpl", v)
+}
+
+func renderWorkerTailnetUserData(v workerTailnetVars) (string, error) {
+	return renderUserData("userdata/worker-tailnet.sh.tmpl", v)
 }
 
 func renderWorkerUserData(v workerVars) (string, error) {

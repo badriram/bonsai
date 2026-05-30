@@ -22,9 +22,18 @@ type controlPlaneHASpec struct {
 	Name, Env       string
 	Net             vpcInfra
 	InstanceProfile string
-	NLBDNS          string
-	TargetGroupArn  string
+	NLBDNS          string // empty in tailnet mode
+	TargetGroupArn  string // empty in tailnet mode
 	BackupBucket    string
+
+	// Tailnet mode: when both fields set, render server-tailnet-ha user-data
+	// and skip NLB target group registration.
+	TailnetURL        string
+	TailnetKeySSMPath string
+}
+
+func (s controlPlaneHASpec) tailnetMode() bool {
+	return s.TailnetURL != "" && s.TailnetKeySSMPath != ""
 }
 
 func haControlPlaneLTName(name, env string) string {
@@ -48,10 +57,18 @@ func (p *Provider) ensureControlPlaneLT(ctx context.Context, spec controlPlaneHA
 	if err != nil {
 		return "", err
 	}
-	userData, err := renderServerHAUserData(serverHAVars{
-		Name: spec.Name, Env: spec.Env, Region: p.awsCfg.Region,
-		NLBDNS: spec.NLBDNS, BackupBucket: spec.BackupBucket,
-	})
+	var userData string
+	if spec.tailnetMode() {
+		userData, err = renderServerTailnetHAUserData(serverTailnetHAVars{
+			Name: spec.Name, Env: spec.Env, Region: p.awsCfg.Region,
+			TailnetURL: spec.TailnetURL, TailnetKeySSMPath: spec.TailnetKeySSMPath,
+		})
+	} else {
+		userData, err = renderServerHAUserData(serverHAVars{
+			Name: spec.Name, Env: spec.Env, Region: p.awsCfg.Region,
+			NLBDNS: spec.NLBDNS, BackupBucket: spec.BackupBucket,
+		})
+	}
 	if err != nil {
 		return "", err
 	}
@@ -132,13 +149,17 @@ func (p *Provider) ensureControlPlaneASGResource(ctx context.Context, spec contr
 		return err
 	}
 
+	var tgARNs []string
+	if spec.TargetGroupArn != "" {
+		tgARNs = []string{spec.TargetGroupArn}
+	}
 	_, err = p.asg.CreateAutoScalingGroup(ctx, &autoscaling.CreateAutoScalingGroupInput{
 		AutoScalingGroupName: aws.String(asgName),
 		MinSize:              aws.Int32(haControlPlaneSize),
 		MaxSize:              aws.Int32(haControlPlaneSize),
 		DesiredCapacity:      aws.Int32(haControlPlaneSize),
 		VPCZoneIdentifier:    aws.String(zones),
-		TargetGroupARNs:      []string{spec.TargetGroupArn},
+		TargetGroupARNs:      tgARNs,
 		// Spread across AZs so an AZ loss leaves a quorum (2 of 3) running.
 		AvailabilityZones: nil, // VPCZoneIdentifier already encodes AZs via subnets
 		LaunchTemplate: &asgtypes.LaunchTemplateSpecification{

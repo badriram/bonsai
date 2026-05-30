@@ -63,6 +63,13 @@ func (p *Provider) ensureControlPlaneLT(ctx context.Context, spec controlPlaneHA
 			Name: aws.String(spec.InstanceProfile),
 		},
 		UserData: aws.String(userData),
+		// AL2023 launch templates default to IMDSv2 token-required; the
+		// user-data script uses IMDSv2 explicitly so this matches.
+		MetadataOptions: &ec2types.LaunchTemplateInstanceMetadataOptionsRequest{
+			HttpTokens:              ec2types.LaunchTemplateHttpTokensStateRequired,
+			HttpPutResponseHopLimit: aws.Int32(2),
+			HttpEndpoint:            ec2types.LaunchTemplateInstanceMetadataEndpointStateEnabled,
+		},
 		TagSpecifications: []ec2types.LaunchTemplateTagSpecificationRequest{
 			{ResourceType: ec2types.ResourceTypeInstance, Tags: clusterTags(spec.Name, spec.Env, "control-plane")},
 		},

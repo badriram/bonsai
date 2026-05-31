@@ -219,6 +219,15 @@ func (p *Provider) ensureSecurityGroups(ctx context.Context, name, env, vpcID st
 	}
 
 	adminCIDR := p.adminCIDR()
+	// Reconcile previously-added admin-CIDR rules: AuthorizeSecurityGroupIngress
+	// is additive only. Without this, every re-run from a new IP would leave
+	// the old CIDR allowed forever. We tag rules we add with the bonsaiAdminDesc
+	// description and revoke any tagged rules whose CIDR doesn't match the
+	// current one (handles both IP drift and switching to tailnet mode where
+	// adminCIDR is empty — all tagged rules get revoked).
+	if err := p.reconcileAdminCIDRRules(ctx, server, adminCIDR); err != nil {
+		return "", "", fmt.Errorf("reconcile admin CIDR rules: %w", err)
+	}
 	// Server ingress: 6443 from workers + admin; 10250 intra-cluster; etcd
 	// peer/client ports intra-server only; flannel VXLAN for pod traffic.
 	rules := []ec2types.IpPermission{
@@ -235,10 +244,13 @@ func (p *Provider) ensureSecurityGroups(ctx context.Context, name, env, vpcID st
 		// NLB ENIs aren't in any SG; target health checks come from VPC IPs,
 		// so allow 6443 from the VPC CIDR. Same-VPC clients are already
 		// implicitly trusted; this just makes NLB health checks pass.
-		cidrRule(6443, 6443, vpcCIDR),
+		cidrRule(6443, 6443, vpcCIDR, ""),
 	}
 	if adminCIDR != "" {
-		rules = append(rules, cidrRule(6443, 6443, adminCIDR), cidrRule(22, 22, adminCIDR))
+		rules = append(rules,
+			cidrRule(6443, 6443, adminCIDR, bonsaiAdminDesc),
+			cidrRule(22, 22, adminCIDR, bonsaiAdminDesc),
+		)
 	}
 	if err := p.authorizeIngress(ctx, server, rules); err != nil {
 		return "", "", fmt.Errorf("server SG rules: %w", err)
@@ -311,11 +323,63 @@ func intraSGUDP(from, to int32, sgID string) ec2types.IpPermission {
 	}
 }
 
-func cidrRule(from, to int32, cidr string) ec2types.IpPermission {
+func cidrRule(from, to int32, cidr, desc string) ec2types.IpPermission {
+	r := ec2types.IpRange{CidrIp: aws.String(cidr)}
+	if desc != "" {
+		r.Description = aws.String(desc)
+	}
 	return ec2types.IpPermission{
 		IpProtocol: aws.String("tcp"),
 		FromPort:   aws.Int32(from),
 		ToPort:     aws.Int32(to),
-		IpRanges:   []ec2types.IpRange{{CidrIp: aws.String(cidr)}},
+		IpRanges:   []ec2types.IpRange{r},
 	}
+}
+
+// bonsaiAdminDesc marks SG rules Bonsai added to gate admin traffic
+// (6443 + 22 from BONSAI_ADMIN_CIDR). reconcileAdminCIDRRules uses this to
+// distinguish bonsai-managed rules from operator-added ones so re-runs from
+// a new admin IP don't accumulate stale CIDRs.
+const bonsaiAdminDesc = "bonsai-admin"
+
+// reconcileAdminCIDRRules revokes any 6443/22 IpRange rules that carry the
+// bonsaiAdminDesc description and whose CIDR no longer matches currentCIDR.
+// Pass currentCIDR == "" to revoke all bonsai-admin rules (e.g. when the
+// operator switches to tailnet mode and no longer wants any public CIDR).
+// Rules without our description (e.g. operator-added manually) are left alone.
+func (p *Provider) reconcileAdminCIDRRules(ctx context.Context, sgID, currentCIDR string) error {
+	out, err := p.ec2.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+		GroupIds: []string{sgID},
+	})
+	if err != nil || len(out.SecurityGroups) == 0 {
+		return err
+	}
+	var toRevoke []ec2types.IpPermission
+	for _, perm := range out.SecurityGroups[0].IpPermissions {
+		from := aws.ToInt32(perm.FromPort)
+		if from != 6443 && from != 22 {
+			continue
+		}
+		for _, r := range perm.IpRanges {
+			if aws.ToString(r.Description) != bonsaiAdminDesc {
+				continue
+			}
+			if aws.ToString(r.CidrIp) == currentCIDR {
+				continue
+			}
+			toRevoke = append(toRevoke, ec2types.IpPermission{
+				IpProtocol: perm.IpProtocol,
+				FromPort:   perm.FromPort,
+				ToPort:     perm.ToPort,
+				IpRanges:   []ec2types.IpRange{{CidrIp: r.CidrIp, Description: r.Description}},
+			})
+		}
+	}
+	if len(toRevoke) == 0 {
+		return nil
+	}
+	_, err = p.ec2.RevokeSecurityGroupIngress(ctx, &ec2.RevokeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID), IpPermissions: toRevoke,
+	})
+	return err
 }

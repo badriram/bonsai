@@ -13,12 +13,19 @@ import (
 // wipes the local FileSecretStore directory. Idempotent: missing resources
 // are not an error.
 //
-// Order:
-//   1. Servers (control plane + workers)
-//   2. Floating IP (unassign + delete)
-//   3. SSH key
-//   4. Local secret directory
+// Order (HA-aware):
+//   1. Load balancer (so its private-network attachment doesn't block Network delete)
+//   2. Servers (control plane + workers — also detach from private network)
+//   3. Floating IP (unassign + delete)
+//   4. Firewall
+//   5. Network (after all attachments gone)
+//   6. SSH key
+//   7. Local secret directory
 func (p *Provider) Destroy(ctx context.Context, name, env string) error {
+	if err := p.destroyLoadBalancer(ctx, name, env); err != nil {
+		return fmt.Errorf("destroy LB: %w", err)
+	}
+
 	servers, err := p.client.Server.AllWithOpts(ctx, hcloud.ServerListOpts{
 		ListOpts: hcloud.ListOpts{LabelSelector: clusterSelector(name, env)},
 	})
@@ -44,6 +51,13 @@ func (p *Provider) Destroy(ctx context.Context, name, env string) error {
 		if _, err := p.client.FloatingIP.Delete(ctx, fip); err != nil && !isNotFound(err) {
 			return fmt.Errorf("delete floating IP %d: %w", fip.ID, err)
 		}
+	}
+
+	if err := p.destroyFirewall(ctx, name, env); err != nil {
+		return fmt.Errorf("destroy firewall: %w", err)
+	}
+	if err := p.destroyNetwork(ctx, name, env); err != nil {
+		return fmt.Errorf("destroy network: %w", err)
 	}
 
 	keys, err := p.client.SSHKey.AllWithOpts(ctx, hcloud.SSHKeyListOpts{

@@ -39,6 +39,9 @@ func (p *Provider) RotateControl(ctx context.Context, name, env string) error {
 	if len(servers) == 0 {
 		return fmt.Errorf("no control plane found for %s/%s", name, env)
 	}
+	if len(servers) >= haControlSize {
+		return p.rotateControlHA(ctx, name, env, servers)
+	}
 	current := servers[0]
 
 	fip, err := p.findControlFloatingIP(ctx, name, env)

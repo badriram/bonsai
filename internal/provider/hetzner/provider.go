@@ -62,9 +62,18 @@ func New(ctx context.Context) (*Provider, error) {
 }
 
 // Provision is idempotent: every step looks up by label, creates if missing.
-// Order: SSH key → floating IP → control plane → wait → retrieve kubeconfig +
-// token → workers → cluster.Bootstrap → save outputs.
+//
+// Three modes, picked by flags:
+//   - Single-node (default): SSH key → floating IP → 1 control plane → 1+ workers
+//   - HA + LB: SSH key → network → firewall → LB → 3 control planes → workers via LB
+//   - HA + tailnet (--tailnet-url + --tailnet-key-file): SSH key → network →
+//     firewall → 3 control planes on tailnet → workers via leader's tailnet IP
+//     (no LB, no public 6443 from cluster nodes)
 func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provider.PlatformOutputs, error) {
+	if cfg.HAControl {
+		return p.provisionHA(ctx, cfg)
+	}
+
 	location := defaultLocation
 	if cfg.Region != "" {
 		location = cfg.Region // Hetzner exposes "regions" as location codes (nbg1, fsn1, hel1, ash, hil)

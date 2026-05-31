@@ -1,0 +1,36 @@
+#cloud-config
+# Worker node on Hetzner — tailnet mode. Joins the operator's tailnet first,
+# then k3s agent joins the cluster via the control plane's tailnet IP.
+
+runcmd:
+  - |
+    set -eu
+
+    curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
+    TAILNET_CRED='{{.TailnetAuthCred}}'
+    case "$TAILNET_CRED" in
+      tskey-client-*)
+        TAILNET_AUTHKEY="${TAILNET_CRED}?ephemeral=true&preauthorized=true"
+        TAILNET_TAG_FLAGS="--advertise-tags={{.TailnetTag}}"
+        ;;
+      *)
+        TAILNET_AUTHKEY="$TAILNET_CRED"
+        TAILNET_TAG_FLAGS=""
+        ;;
+    esac
+    tailscale up \
+      --authkey="$TAILNET_AUTHKEY" \
+      --login-server="{{.TailnetURL}}" \
+      --hostname="bonsai-{{.Name}}-{{.Env}}-worker-{{.NodeIndex}}" \
+      $TAILNET_TAG_FLAGS \
+      --accept-routes
+    TAILNET_IP="$(tailscale ip -4)"
+
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+      K3S_URL="https://{{.ControlTailnetIP}}:6443" \
+      K3S_TOKEN="{{.Token}}" \
+      INSTALL_K3S_EXEC="agent --node-ip=${TAILNET_IP} --flannel-iface=tailscale0" \
+      sh -
+
+    touch /var/lib/bonsai-worker-ready

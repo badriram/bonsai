@@ -35,12 +35,20 @@ type ClusterConfig struct {
 	// be defined in the operator's tailnet ACL. Required when using an OAuth
 	// client secret; ignored for pre-auth keys (those have the tag baked in).
 	TailnetTag string
+
+	// TailnetKeyFile is the local-filesystem path holding the tailnet credential
+	// (OAuth client secret or pre-auth key, single line). Same role as
+	// TailnetKeySSMPath but for providers without a managed parameter store
+	// (Hetzner). Bonsai reads it once at grow time and bakes the value into
+	// cloud-init user-data; rotation is the operator's job. Exactly one of
+	// TailnetKeySSMPath / TailnetKeyFile should be set.
+	TailnetKeyFile string
 }
 
 // TailnetMode returns true when the cluster should join an operator-owned
 // tailnet instead of exposing a public API endpoint.
 func (c ClusterConfig) TailnetMode() bool {
-	return c.TailnetURL != "" && c.TailnetKeySSMPath != ""
+	return c.TailnetURL != "" && (c.TailnetKeySSMPath != "" || c.TailnetKeyFile != "")
 }
 
 // SSMPathPrefix returns the canonical SSM Parameter Store prefix for a cluster's

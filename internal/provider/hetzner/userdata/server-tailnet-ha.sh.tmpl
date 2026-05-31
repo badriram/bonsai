@@ -1,0 +1,68 @@
+#cloud-config
+# HA control plane node on Hetzner — tailnet mode.
+#
+# Each node joins the operator's tailnet on boot, then k3s mesh (etcd peer
+# + apiserver) runs over the tailscale0 interface. No public 6443 surface
+# from this node; only members of the operator's tailnet can reach the API.
+#
+# OAuth client secret (tskey-client-*) is recommended over reusable pre-auth
+# key (tskey-auth-*) — same prefix-detection rule as the AWS template.
+
+ssh_keys:
+  ed25519_private: |
+{{.HostKeyPrivateIndented}}
+  ed25519_public: '{{.HostKeyPublic}}'
+
+runcmd:
+  - |
+    set -eu
+
+    # Install + start tailscale, join the operator's tailnet.
+    curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
+    TAILNET_CRED='{{.TailnetAuthCred}}'
+    case "$TAILNET_CRED" in
+      tskey-client-*)
+        TAILNET_AUTHKEY="${TAILNET_CRED}?ephemeral=true&preauthorized=true"
+        TAILNET_TAG_FLAGS="--advertise-tags={{.TailnetTag}}"
+        ;;
+      *)
+        TAILNET_AUTHKEY="$TAILNET_CRED"
+        TAILNET_TAG_FLAGS=""
+        ;;
+    esac
+    tailscale up \
+      --authkey="$TAILNET_AUTHKEY" \
+      --login-server="{{.TailnetURL}}" \
+      --hostname="bonsai-{{.Name}}-{{.Env}}-control-{{.NodeIndex}}" \
+      $TAILNET_TAG_FLAGS \
+      --accept-routes
+    TAILNET_IP="$(tailscale ip -4)"
+
+    {{if .IsLeader}}
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+      K3S_TOKEN="{{.Token}}" \
+      sh -s - server \
+      --cluster-init \
+      --write-kubeconfig-mode=0644 \
+      --node-ip="$TAILNET_IP" \
+      --advertise-address="$TAILNET_IP" \
+      --tls-san="$TAILNET_IP" \
+      --flannel-iface=tailscale0 \
+      --disable=traefik
+    {{else}}
+    # Joiner — leader's tailnet IP was baked in at render time by Bonsai
+    # after it SSHed into the leader and ran `tailscale ip -4`.
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+      K3S_TOKEN="{{.Token}}" \
+      sh -s - server \
+      --server "https://{{.LeaderTailnetIP}}:6443" \
+      --write-kubeconfig-mode=0644 \
+      --node-ip="$TAILNET_IP" \
+      --advertise-address="$TAILNET_IP" \
+      --tls-san="$TAILNET_IP" \
+      --flannel-iface=tailscale0 \
+      --disable=traefik
+    {{end}}
+    touch /var/lib/bonsai-server-ready

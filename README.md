@@ -7,7 +7,7 @@ Self-service infrastructure CLI. One command provisions a k3s cluster on AWS (la
 **Homebrew** (macOS + Linux):
 
 ```sh
-brew tap badriram/tap
+brew tap badriram/tools
 brew install bonsai
 # later:
 brew upgrade bonsai

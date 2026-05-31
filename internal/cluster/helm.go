@@ -8,6 +8,7 @@ import (
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/registry"
 )
 
 // helmClient is a thin wrapper around the helm SDK that gives us a single
@@ -44,6 +45,14 @@ func (h *helmClient) upgradeOrInstall(ctx context.Context, spec chartSpec) error
 	if err := cfg.Init(h.settings.RESTClientGetter(), spec.Namespace, "secret", noopLog); err != nil {
 		return fmt.Errorf("helm init: %w", err)
 	}
+	// OCI charts (e.g. oci://registry-1.docker.io/bitnamicharts/valkey) require
+	// a registry client; non-OCI repos ignore it. Set it unconditionally so
+	// either path works.
+	regClient, err := registry.NewClient()
+	if err != nil {
+		return fmt.Errorf("helm registry client: %w", err)
+	}
+	cfg.RegistryClient = regClient
 
 	hist := action.NewHistory(cfg)
 	hist.Max = 1

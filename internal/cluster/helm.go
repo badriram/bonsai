@@ -34,6 +34,11 @@ func newHelm(kubeconfigPath string) *helmClient {
 }
 
 func (h *helmClient) upgradeOrInstall(ctx context.Context, spec chartSpec) error {
+	// helm's KubeClient picks up its default namespace from settings, NOT from
+	// install.Namespace. Charts that don't set metadata.namespace explicitly
+	// (e.g. cloudnative-pg) would otherwise land in the kubeconfig context's
+	// default namespace instead of the release namespace.
+	h.settings.SetNamespace(spec.Namespace)
 	cfg := new(action.Configuration)
 	noopLog := func(string, ...any) {}
 	if err := cfg.Init(h.settings.RESTClientGetter(), spec.Namespace, "secret", noopLog); err != nil {

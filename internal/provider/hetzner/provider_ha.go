@@ -8,9 +8,10 @@ import (
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 
-	"github.com/badri/bonsai/internal/cluster"
-	bcfg "github.com/badri/bonsai/internal/config"
-	"github.com/badri/bonsai/internal/provider"
+	"github.com/badriram/bonsai/internal/cluster"
+	bcfg "github.com/badriram/bonsai/internal/config"
+	"github.com/badriram/bonsai/internal/progress"
+	"github.com/badriram/bonsai/internal/provider"
 )
 
 // provisionHA handles the --ha-control path on Hetzner. Two sub-modes:
@@ -18,7 +19,10 @@ import (
 //   - LB     (default with --ha-control):     Hetzner Load Balancer fronts 6443
 func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (provider.PlatformOutputs, error) {
 	locations := haLocations() // nbg1, fsn1, hel1
+	progress.Step("hetzner HA grow: cluster=%s env=%s locations=%v workers=%d tailnet=%v",
+		cfg.Name, cfg.Env, locations, cfg.Workers, cfg.TailnetMode())
 
+	progress.Step("ensuring SSH + host keys")
 	sshKey, err := p.ensureSSHKey(ctx, cfg.Name, cfg.Env)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("ssh key: %w", err)
@@ -28,6 +32,7 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 		return provider.PlatformOutputs{}, err
 	}
 
+	progress.Step("ensuring network 10.0.0.0/16 (subnets per location)")
 	network, err := p.ensureNetwork(ctx, cfg.Name, cfg.Env, locations)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("network: %w", err)
@@ -53,15 +58,18 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 			return provider.PlatformOutputs{}, fmt.Errorf("read tailnet credential: %w", err)
 		}
 	} else {
+		progress.Step("ensuring load balancer (lb11)")
 		lbInfra, err = p.ensureLoadBalancer(ctx, cfg.Name, cfg.Env, network)
 		if err != nil {
 			return provider.PlatformOutputs{}, fmt.Errorf("load balancer: %w", err)
 		}
+		progress.Step("LB ready: public=%s private=%s", lbInfra.PublicIP, lbInfra.PrivateIP)
 		clusterEndpoint = lbInfra.PublicIP
 		workerJoinIP = lbInfra.PublicIP
 		lbPrivateIPForFW = lbInfra.PrivateIP
 	}
 
+	progress.Step("ensuring firewall")
 	fw, err := p.ensureFirewall(ctx, cfg.Name, cfg.Env, lbPrivateIPForFW)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("firewall: %w", err)
@@ -83,10 +91,12 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 		ClusterEndpoint:        clusterEndpoint,
 		Image:                  image,
 	}
+	progress.Step("provisioning 3-node control plane (leader-first)")
 	leader, _, leaderReachableIP, err := p.ensureControlPlaneHA(ctx, spec)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("control plane HA: %w", err)
 	}
+	progress.Step("control plane ready: leader reachable at %s", leaderReachableIP)
 
 	if tailnetMode {
 		clusterEndpoint = leaderReachableIP // tailnet IP
@@ -113,10 +123,13 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 	if workerCount < 1 {
 		workerCount = 1
 	}
+	progress.Step("provisioning %d worker(s)", workerCount)
 	if err := p.ensureWorkersHA(ctx, cfg.Name, cfg.Env, locations, sshKey, network, fw, workerJoinIP, token, workerCount, tailnetMode, tailnetCred, cfg); err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("workers: %w", err)
 	}
+	progress.Step("workers ready")
 
+	progress.Step("running in-cluster bootstrap (helm: cnpg, valkey, kured, suc)")
 	out, err := cluster.Bootstrap(ctx, cluster.Config{
 		Kubeconfig: []byte(kubeconfig),
 		Name:       cfg.Name,

@@ -13,10 +13,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
-	"github.com/badri/bonsai/internal/cluster"
-	bcfg "github.com/badri/bonsai/internal/config"
-	"github.com/badri/bonsai/internal/provider"
-	"github.com/badri/bonsai/internal/secrets"
+	"github.com/badriram/bonsai/internal/cluster"
+	bcfg "github.com/badriram/bonsai/internal/config"
+	"github.com/badriram/bonsai/internal/provider"
+	"github.com/badriram/bonsai/internal/secrets"
 )
 
 // Provider implements provider.PlatformProvider against AWS using the SDK

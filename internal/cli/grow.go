@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/badri/bonsai/internal/config"
-	"github.com/badri/bonsai/internal/provider"
-	awsprov "github.com/badri/bonsai/internal/provider/aws"
-	hetznerprov "github.com/badri/bonsai/internal/provider/hetzner"
+	"github.com/badriram/bonsai/internal/config"
+	"github.com/badriram/bonsai/internal/provider"
+	awsprov "github.com/badriram/bonsai/internal/provider/aws"
+	hetznerprov "github.com/badriram/bonsai/internal/provider/hetzner"
 	"github.com/spf13/cobra"
 )
 

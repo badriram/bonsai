@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/badri/bonsai/internal/cli"
+	"github.com/badriram/bonsai/internal/cli"
 )
 
 // version is set at build time by the Makefile via -ldflags. Defaults to "dev"

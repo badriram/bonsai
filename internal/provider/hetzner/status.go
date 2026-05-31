@@ -5,8 +5,8 @@ import (
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 
-	"github.com/badri/bonsai/internal/cluster"
-	"github.com/badri/bonsai/internal/provider"
+	"github.com/badriram/bonsai/internal/cluster"
+	"github.com/badriram/bonsai/internal/provider"
 )
 
 // Status: read-only snapshot from Hetzner API + the locally stored kubeconfig.

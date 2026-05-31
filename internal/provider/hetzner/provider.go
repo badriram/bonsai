@@ -9,10 +9,10 @@ import (
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 
-	"github.com/badri/bonsai/internal/cluster"
-	bcfg "github.com/badri/bonsai/internal/config"
-	"github.com/badri/bonsai/internal/provider"
-	"github.com/badri/bonsai/internal/secrets"
+	"github.com/badriram/bonsai/internal/cluster"
+	bcfg "github.com/badriram/bonsai/internal/config"
+	"github.com/badriram/bonsai/internal/provider"
+	"github.com/badriram/bonsai/internal/secrets"
 )
 
 // Hetzner pinning. Bumps are intentional commits.
@@ -20,7 +20,7 @@ const (
 	defaultK3sVersion       = "v1.31.0+k3s1"
 	defaultLocation         = "nbg1" // Nuremberg — cheap, well-connected
 	defaultControlImage     = "ubuntu-24.04"
-	defaultServerType       = "cx22" // 2 vCPU, 4GB, ~€5/mo
+	defaultServerType       = "cpx22" // 2 vCPU AMD, 4GB, ~€5/mo (cx22 deprecated 2026; cax11 arm stock thin)
 	sshReadyTimeout         = 5 * time.Minute
 	k3sReadyTimeout         = 10 * time.Minute
 	kubeconfigSecretKey     = "kubeconfig"

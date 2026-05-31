@@ -1,4 +1,4 @@
-module github.com/badri/bonsai
+module github.com/badriram/bonsai
 
 go 1.26.0
 

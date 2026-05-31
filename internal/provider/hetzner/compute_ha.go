@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
+
+	"github.com/badriram/bonsai/internal/progress"
 )
 
 // HA control plane orchestration on Hetzner.
@@ -79,16 +81,20 @@ func (p *Provider) ensureControlPlaneHA(ctx context.Context, spec haControlSpec)
 		return nil, nil, "", err
 	}
 
+	progress.Step("creating leader in %s", spec.Locations[0])
 	leader, err = p.createHAServer(ctx, spec, 1, token, "", "")
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("create leader: %w", err)
 	}
+	progress.Step("leader created: %s (public %s) — waiting for SSH", leader.Name, firstPublicIP(leader))
 	if err := waitForSSH(ctx, firstPublicIP(leader), sshReadyTimeout); err != nil {
 		return nil, nil, "", err
 	}
+	progress.Step("leader SSH up — waiting for k3s ready marker (up to %s)", k3sReadyTimeout)
 	if err := p.waitForHAServerReady(ctx, spec.Name, spec.Env, firstPublicIP(leader)); err != nil {
 		return nil, nil, "", err
 	}
+	progress.Step("leader k3s ready")
 
 	leaderPrivateIP := firstPrivateIP(leader)
 	leaderTailnetIP := ""
@@ -105,16 +111,20 @@ func (p *Provider) ensureControlPlaneHA(ctx context.Context, spec haControlSpec)
 
 	all = append(all, leader)
 	for i := 1; i < haControlSize; i++ {
+		progress.Step("creating joiner-%d in %s", i+1, spec.Locations[i])
 		joiner, err := p.createHAServer(ctx, spec, i+1, token, leaderPrivateIP, leaderTailnetIP)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("create joiner %d: %w", i+1, err)
 		}
+		progress.Step("joiner-%d created: %s — waiting for SSH", i+1, firstPublicIP(joiner))
 		if err := waitForSSH(ctx, firstPublicIP(joiner), sshReadyTimeout); err != nil {
 			return nil, nil, "", err
 		}
+		progress.Step("joiner-%d SSH up — waiting for k3s join", i+1)
 		if err := p.waitForHAServerReady(ctx, spec.Name, spec.Env, firstPublicIP(joiner)); err != nil {
 			return nil, nil, "", err
 		}
+		progress.Step("joiner-%d k3s joined", i+1)
 		if err := p.applyFirewall(ctx, spec.Firewall, joiner); err != nil {
 			return nil, nil, "", fmt.Errorf("apply firewall to joiner %d: %w", i+1, err)
 		}
@@ -122,6 +132,7 @@ func (p *Provider) ensureControlPlaneHA(ctx context.Context, spec haControlSpec)
 	}
 
 	if spec.LB != nil {
+		progress.Step("attaching %d control nodes to LB", len(all))
 		for _, srv := range all {
 			if err := p.attachServerToLB(ctx, spec.LB.LB, srv); err != nil {
 				return nil, nil, "", fmt.Errorf("attach %d to LB: %w", srv.ID, err)

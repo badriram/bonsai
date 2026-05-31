@@ -2,10 +2,39 @@
 # k3s worker cloud-init for Hetzner. Templated by Bonsai.
 set -eu
 
-curl -sfL https://get.k3s.io | \
-  INSTALL_K3S_VERSION="{{.K3sVersion}}" \
-  K3S_URL="https://{{.ControlIP}}:6443" \
-  K3S_TOKEN="{{.Token}}" \
-  sh -
+# Discover private-network IP if this worker is attached to a Hetzner Network
+# (HA mode). In single mode there is no private network and we register with
+# the public IP. Without --node-ip the worker registers its default-route IP
+# (public eth0), which breaks flannel VXLAN routing to private-IP control
+# nodes because the Hetzner Cloud Firewall blocks UDP 8472 from public CIDRs.
+PRIV_IP=""
+PRIV_IFACE=""
+for i in $(seq 1 60); do
+  PRIV_IP=$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | grep -E '^10\.' | head -1 | cut -d/ -f1) || true
+  if [ -n "$PRIV_IP" ]; then
+    PRIV_IFACE=$(ip -4 -o addr show | awk -v ip="$PRIV_IP" '$4 ~ ip {print $2; exit}')
+  fi
+  [ -n "$PRIV_IP" ] && [ -n "$PRIV_IFACE" ] && break
+  # In single-node mode there's no private network — bail early.
+  [ $i -ge 5 ] && break
+  sleep 2
+done
+
+if [ -n "$PRIV_IP" ] && [ -n "$PRIV_IFACE" ]; then
+  EXEC="agent --node-ip=$PRIV_IP --flannel-iface=$PRIV_IFACE"
+else
+  EXEC=""
+fi
+
+for attempt in 1 2 3 4 5; do
+  curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+    K3S_URL="https://{{.ControlIP}}:6443" \
+    K3S_TOKEN="{{.Token}}" \
+    INSTALL_K3S_EXEC="$EXEC" \
+    sh - && break
+  echo "bonsai: k3s install attempt $attempt failed; retrying in $((attempt*5))s" >&2
+  sleep $((attempt * 5))
+done
 
 touch /var/lib/bonsai-worker-ready

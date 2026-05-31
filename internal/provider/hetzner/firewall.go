@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 )
@@ -124,11 +126,26 @@ func parseCIDR(s string) (net.IPNet, error) {
 }
 
 // applyFirewall attaches the firewall to a server. Idempotent.
+// Hetzner Cloud Firewalls only attach to a server's public NIC, and the
+// public IPv4 is attached asynchronously after Server.Create returns —
+// retry on private_net_only_server while the public IP is being wired up.
 func (p *Provider) applyFirewall(ctx context.Context, fw *hcloud.Firewall, srv *hcloud.Server) error {
 	res := hcloud.FirewallResource{Type: hcloud.FirewallResourceTypeServer, Server: &hcloud.FirewallResourceServer{ID: srv.ID}}
-	_, _, err := p.client.Firewall.ApplyResources(ctx, fw, []hcloud.FirewallResource{res})
-	// Idempotent on re-apply per Hetzner API docs.
-	return err
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		_, _, err := p.client.Firewall.ApplyResources(ctx, fw, []hcloud.FirewallResource{res})
+		if err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "private_net_only_server") || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
 }
 
 func (p *Provider) destroyFirewall(ctx context.Context, name, env string) error {
@@ -139,8 +156,44 @@ func (p *Provider) destroyFirewall(ctx context.Context, name, env string) error 
 		return err
 	}
 	for _, fw := range fws {
-		if _, err := p.client.Firewall.Delete(ctx, fw); err != nil {
-			return fmt.Errorf("delete firewall %d: %w", fw.ID, err)
+		// Hetzner reports the firewall as "in use" until its applied_to list
+		// fully clears after the linked servers are deleted. Explicitly remove
+		// the resources first so Delete doesn't race on the consistency lag.
+		cur, _, err := p.client.Firewall.GetByID(ctx, fw.ID)
+		if err == nil && cur != nil && len(cur.AppliedTo) > 0 {
+			resources := make([]hcloud.FirewallResource, 0, len(cur.AppliedTo))
+			for _, r := range cur.AppliedTo {
+				if r.Type == hcloud.FirewallResourceTypeServer && r.Server != nil {
+					resources = append(resources, hcloud.FirewallResource{
+						Type:   hcloud.FirewallResourceTypeServer,
+						Server: &hcloud.FirewallResourceServer{ID: r.Server.ID},
+					})
+				}
+			}
+			if len(resources) > 0 {
+				_, _, _ = p.client.Firewall.RemoveResources(ctx, fw, resources)
+			}
+		}
+		// Retry the delete a few times — applied_to clears asynchronously.
+		var lastErr error
+		for i := 0; i < 12; i++ {
+			if _, err := p.client.Firewall.Delete(ctx, fw); err == nil {
+				lastErr = nil
+				break
+			} else {
+				lastErr = err
+				if !strings.Contains(err.Error(), "resource_in_use") {
+					break
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
+		if lastErr != nil {
+			return fmt.Errorf("delete firewall %d: %w", fw.ID, lastErr)
 		}
 	}
 	return nil

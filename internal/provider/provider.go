@@ -3,7 +3,7 @@ package provider
 import (
 	"context"
 
-	"github.com/badri/bonsai/internal/config"
+	"github.com/badriram/bonsai/internal/config"
 )
 
 // PlatformProvider is the only contract the CLI knows about. Each cloud (AWS,

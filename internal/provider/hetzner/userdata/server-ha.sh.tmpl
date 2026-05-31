@@ -17,31 +17,59 @@ ssh_keys:
 runcmd:
   - |
     set -eu
-    {{if .IsLeader}}
-    # Leader — initialize a fresh embedded-etcd cluster.
-    curl -sfL https://get.k3s.io | \
-      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
-      K3S_TOKEN="{{.Token}}" \
-      sh -s - server \
-      --cluster-init \
-      --write-kubeconfig-mode=0644 \
-      --node-ip="{{.NodePrivateIP}}" \
-      --advertise-address="{{.NodePrivateIP}}" \
-      --tls-san="{{.ClusterEndpoint}}" \
-      --disable=traefik
-    {{else}}
-    # Joiner — register with the existing etcd cluster via the leader's
-    # private IP (HA LB doesn't help here since the leader is the only
-    # healthy target at this point).
-    curl -sfL https://get.k3s.io | \
-      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
-      K3S_TOKEN="{{.Token}}" \
-      sh -s - server \
-      --server "https://{{.LeaderPrivateIP}}:6443" \
-      --write-kubeconfig-mode=0644 \
-      --node-ip="{{.NodePrivateIP}}" \
-      --advertise-address="{{.NodePrivateIP}}" \
-      --tls-san="{{.ClusterEndpoint}}" \
-      --disable=traefik
-    {{end}}
+
+    # Discover the private-network IP AND the matching interface name.
+    # Templates can't bake either in — Hetzner allocates the IP after
+    # server creation, and the NIC gets configured asynchronously. Both
+    # must be live before we hand them to k3s, otherwise flannel binds
+    # its VXLAN socket to the default-route public NIC and the VTEP
+    # leaks the public source IP — Hetzner's firewall then drops the
+    # encapsulated UDP/8472 across nodes, silently breaking pod mesh.
+    PRIV_IP=""
+    PRIV_IFACE=""
+    for i in $(seq 1 60); do
+      PRIV_IP=$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | grep -E '^10\.' | head -1 | cut -d/ -f1) || true
+      if [ -n "$PRIV_IP" ]; then
+        PRIV_IFACE=$(ip -4 -o addr show | awk -v ip="$PRIV_IP" '$4 ~ ip {print $2; exit}')
+      fi
+      [ -n "$PRIV_IP" ] && [ -n "$PRIV_IFACE" ] && break
+      sleep 2
+    done
+    if [ -z "$PRIV_IP" ] || [ -z "$PRIV_IFACE" ]; then
+      echo "bonsai: could not discover private IP+iface (ip=$PRIV_IP iface=$PRIV_IFACE)" >&2
+      exit 1
+    fi
+
+    # Retry the k3s install on transient GitHub download failures —
+    # cloud-init runs once and a flaky CDN moment shouldn't kill the boot.
+    install_k3s() {
+      curl -sfL https://get.k3s.io | \
+        INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+        K3S_TOKEN="{{.Token}}" \
+        sh -s - "$@"
+    }
+    for attempt in 1 2 3 4 5; do
+      {{if .IsLeader}}
+      install_k3s server \
+        --cluster-init \
+        --write-kubeconfig-mode=0644 \
+        --node-ip="$PRIV_IP" \
+        --advertise-address="$PRIV_IP" \
+        --tls-san="{{.ClusterEndpoint}}" \
+        --flannel-iface="$PRIV_IFACE" \
+        --disable=traefik && break
+      {{else}}
+      install_k3s server \
+        --server "https://{{.LeaderPrivateIP}}:6443" \
+        --write-kubeconfig-mode=0644 \
+        --node-ip="$PRIV_IP" \
+        --advertise-address="$PRIV_IP" \
+        --tls-san="{{.ClusterEndpoint}}" \
+        --flannel-iface="$PRIV_IFACE" \
+        --disable=traefik && break
+      {{end}}
+      echo "bonsai: k3s install attempt $attempt failed; retrying in $((attempt*5))s" >&2
+      sleep $((attempt * 5))
+    done
+    systemctl is-active k3s >/dev/null || { echo "bonsai: k3s never became active" >&2; exit 1; }
     touch /var/lib/bonsai-server-ready

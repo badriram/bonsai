@@ -22,7 +22,7 @@ const (
 	bakeImageTagBuiltAt = "bonsai-node.built-at"
 	bakeKeepN           = 5
 	builderLocation     = defaultLocation
-	builderServerType   = "cx22"
+	builderServerType   = "cpx22"
 	builderImage        = "ubuntu-24.04"
 )
 

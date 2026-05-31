@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 )
@@ -35,6 +36,29 @@ func (p *Provider) Destroy(ctx context.Context, name, env string) error {
 	for _, s := range servers {
 		if _, _, err := p.client.Server.DeleteWithResult(ctx, s); err != nil && !isNotFound(err) {
 			return fmt.Errorf("delete server %s: %w", s.Name, err)
+		}
+	}
+	// Server.Delete is async; the firewall stays "in use" until each server
+	// actually leaves. Poll until no Bonsai-labeled servers remain so the
+	// firewall + network deletes that follow don't race.
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		remaining, err := p.client.Server.AllWithOpts(ctx, hcloud.ServerListOpts{
+			ListOpts: hcloud.ListOpts{LabelSelector: clusterSelector(name, env)},
+		})
+		if err != nil {
+			return fmt.Errorf("poll server deletion: %w", err)
+		}
+		if len(remaining) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("servers still present after 3m: %d remaining", len(remaining))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
 		}
 	}
 

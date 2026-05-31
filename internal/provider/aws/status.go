@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 
-	"github.com/badri/bonsai/internal/provider"
+	"github.com/badriram/bonsai/internal/provider"
 )
 
 // Status is a read-only snapshot. It does not contact the k3s API — that

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
@@ -67,7 +68,14 @@ func (p *Provider) RotateControl(ctx context.Context, name, env string) error {
 	if err != nil {
 		return err
 	}
-	userData, err := renderRestoreUserData()
+	hostPriv, hostPub, err := p.hostKeyMaterial(ctx, name, env)
+	if err != nil {
+		return err
+	}
+	userData, err := renderRestoreUserData(restoreVars{
+		HostKeyPublic:          strings.TrimSpace(hostPub),
+		HostKeyPrivateIndented: indentForCloudConfig(hostPriv, 4),
+	})
 	if err != nil {
 		return err
 	}

@@ -1,11 +1,21 @@
-#!/bin/sh
+#cloud-config
 # Restore cloud-init for Hetzner control-plane rotation. Does NOT install k3s.
 # Bonsai SSHs in after this finishes to push the snapshot and run the k3s
 # installer (which detects the restored state at /var/lib/rancher/k3s).
-set -eu
+#
+# Host key is the same Bonsai-controlled key the original server used, so
+# rotate-control's SSH session pins identically and the operator keypair
+# authenticates the same way it did pre-rotation.
 
-apt-get update -y >/dev/null
-apt-get install -y curl ca-certificates >/dev/null
+ssh_keys:
+  ed25519_private: |
+{{.HostKeyPrivateIndented}}
+  ed25519_public: '{{.HostKeyPublic}}'
 
-mkdir -p /var/lib/rancher
-touch /var/lib/bonsai-restore-ready
+runcmd:
+  - |
+    set -eu
+    apt-get update -y >/dev/null
+    apt-get install -y curl ca-certificates >/dev/null
+    mkdir -p /var/lib/rancher
+    touch /var/lib/bonsai-restore-ready

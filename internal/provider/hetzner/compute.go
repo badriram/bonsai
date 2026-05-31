@@ -3,6 +3,7 @@ package hetzner
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 )
@@ -56,7 +57,16 @@ func (p *Provider) ensureControlPlane(ctx context.Context, name, env, location s
 		}
 	}
 
-	userData, err := renderServerUserData(serverVars{ControlIP: controlIP, K3sVersion: defaultK3sVersion})
+	hostPriv, hostPub, err := p.hostKeyMaterial(ctx, name, env)
+	if err != nil {
+		return nil, err
+	}
+	userData, err := renderServerUserData(serverVars{
+		ControlIP:              controlIP,
+		K3sVersion:             defaultK3sVersion,
+		HostKeyPublic:          strings.TrimSpace(hostPub),
+		HostKeyPrivateIndented: indentForCloudConfig(hostPriv, 4),
+	})
 	if err != nil {
 		return nil, err
 	}

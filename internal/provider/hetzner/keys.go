@@ -26,3 +26,12 @@ func generateAuthorizedKey() (authorizedPublic string, privatePEM []byte, err er
 	}
 	return string(ssh.MarshalAuthorizedKey(sshPub)), pem.EncodeToMemory(privBlock), nil
 }
+
+// generateHostKey produces an ed25519 host keypair for the server. The
+// authorized-key form of the public key is what sshd's HostKey line resolves
+// to once cloud-init installs it; the PEM form is what cloud-init writes to
+// /etc/ssh/ssh_host_ed25519_key. Same shape as generateAuthorizedKey, kept
+// separate so future host-key-rotation logic stays orthogonal to client keys.
+func generateHostKey() (authorizedPublic string, privatePEM []byte, err error) {
+	return generateAuthorizedKey()
+}

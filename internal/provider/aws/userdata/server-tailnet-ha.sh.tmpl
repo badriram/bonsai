@@ -1,0 +1,138 @@
+#!/bin/sh
+# k3s server bootstrap for HA control plane on operator's tailnet.
+#
+# Same SSM-lock leader election as server-ha.sh.tmpl, but every node
+# joins the operator's tailnet first and the cluster endpoint is the
+# leader's tailnet IP (not an NLB DNS). No public 6443 surface.
+set -eu
+
+NAME="{{.Name}}"
+ENV="{{.Env}}"
+REGION="{{.Region}}"
+TAILNET_URL="{{.TailnetURL}}"
+TAILNET_KEY_SSM="{{.TailnetKeySSMPath}}"
+TAILNET_TAG="{{.TailnetTag}}"
+
+LEADER_KEY="/bonsai/${NAME}/${ENV}/etcd-init-leader"
+TOKEN_KEY="/bonsai/${NAME}/${ENV}/token"
+CONTROL_IP_KEY="/bonsai/${NAME}/${ENV}/control-tailnet-ip"
+KUBECONFIG_KEY="/bonsai/${NAME}/${ENV}/kubeconfig"
+ENDPOINT_KEY="/bonsai/${NAME}/${ENV}/cluster_endpoint"
+
+command -v aws >/dev/null 2>&1 || {
+  if command -v dnf >/dev/null; then dnf install -y awscli >/dev/null
+  elif command -v apk >/dev/null; then apk add --no-cache aws-cli >/dev/null
+  fi
+}
+
+IMDS_TOKEN="$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")"
+INSTANCE_ID="$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id)"
+
+# Install tailscale and join the operator's tailnet.
+curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
+TAILNET_CRED="$(aws ssm get-parameter --region "$REGION" \
+  --name "$TAILNET_KEY_SSM" --with-decryption \
+  --query Parameter.Value --output text)"
+# OAuth client secrets (tskey-client-*) tell the tailscale CLI to mint a
+# per-node key on demand. We append URL params to make those minted keys
+# ephemeral + preauthorized; for pre-auth keys (tskey-auth-*) the params
+# are ignored and the key's baked-in properties apply.
+case "$TAILNET_CRED" in
+  tskey-client-*)
+    TAILNET_AUTHKEY="${TAILNET_CRED}?ephemeral=true&preauthorized=true"
+    TAILNET_TAG_FLAGS="--advertise-tags=${TAILNET_TAG}"
+    ;;
+  *)
+    TAILNET_AUTHKEY="$TAILNET_CRED"
+    TAILNET_TAG_FLAGS=""
+    ;;
+esac
+tailscale up \
+  --authkey="$TAILNET_AUTHKEY" \
+  --login-server="$TAILNET_URL" \
+  --hostname="bonsai-${NAME}-${ENV}-${INSTANCE_ID}" \
+  $TAILNET_TAG_FLAGS \
+  --accept-routes
+# Tailscaled allocates the tailnet IP synchronously by the time `up` returns.
+TAILNET_IP="$(tailscale ip -4)"
+
+# Cluster token (pre-seeded by Bonsai).
+TOKEN="$(aws ssm get-parameter --region "$REGION" \
+  --name "$TOKEN_KEY" --with-decryption \
+  --query Parameter.Value --output text)"
+
+# Race for leader lock — atomic via SSM --no-overwrite.
+if aws ssm put-parameter \
+     --region "$REGION" --name "$LEADER_KEY" --type String \
+     --value "$INSTANCE_ID" --no-overwrite >/dev/null 2>&1; then
+  ROLE="leader"
+else
+  ROLE="joiner"
+fi
+
+if [ "$ROLE" = "leader" ]; then
+  # Publish the leader's tailnet IP first so joiners can find us.
+  aws ssm put-parameter --region "$REGION" --name "$CONTROL_IP_KEY" \
+    --type String --value "$TAILNET_IP" --overwrite >/dev/null
+
+  curl -sfL https://get.k3s.io | K3S_TOKEN="$TOKEN" sh -s - server \
+    --cluster-init \
+    --write-kubeconfig-mode=0644 \
+    --node-ip="$TAILNET_IP" \
+    --advertise-address="$TAILNET_IP" \
+    --tls-san="$TAILNET_IP" \
+    --flannel-iface=tailscale0 \
+    --disable=traefik
+
+  NODE_TOKEN="$(cat /var/lib/rancher/k3s/server/node-token)"
+  aws ssm put-parameter --region "$REGION" --name "$TOKEN_KEY" \
+    --type SecureString --value "$NODE_TOKEN" --overwrite >/dev/null
+
+  ENDPOINT="https://${TAILNET_IP}:6443"
+  aws ssm put-parameter --region "$REGION" --name "$ENDPOINT_KEY" \
+    --type String --value "$ENDPOINT" --overwrite >/dev/null
+
+  KUBECFG="$(sed "s|127.0.0.1|${TAILNET_IP}|g" /etc/rancher/k3s/k3s.yaml)"
+  aws ssm put-parameter --region "$REGION" --name "$KUBECONFIG_KEY" \
+    --type SecureString --value "$KUBECFG" --overwrite >/dev/null
+  exit 0
+fi
+
+# Joiner: wait for the leader to publish its tailnet IP.
+for i in $(seq 1 90); do
+  LEADER_IP="$(aws ssm get-parameter --region "$REGION" \
+    --name "$CONTROL_IP_KEY" --query Parameter.Value --output text 2>/dev/null || true)"
+  [ -n "${LEADER_IP:-}" ] && break
+  sleep 10
+done
+[ -n "${LEADER_IP:-}" ] || { echo "leader tailnet IP never appeared"; exit 1; }
+
+# Wait for leader's k3s API to be reachable on the tailnet.
+for i in $(seq 1 90); do
+  if curl -sk --max-time 5 "https://${LEADER_IP}:6443/healthz" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 10
+done
+
+# Re-read token (leader may have overwritten the seed with node-token).
+for i in $(seq 1 30); do
+  CUR="$(aws ssm get-parameter --region "$REGION" --name "$TOKEN_KEY" \
+    --with-decryption --query Parameter.Value --output text 2>/dev/null || true)"
+  if [ -n "$CUR" ] && [ "$CUR" != "$TOKEN" ]; then
+    TOKEN="$CUR"
+    break
+  fi
+  sleep 5
+done
+
+curl -sfL https://get.k3s.io | K3S_TOKEN="$TOKEN" sh -s - server \
+  --server "https://${LEADER_IP}:6443" \
+  --write-kubeconfig-mode=0644 \
+  --node-ip="$TAILNET_IP" \
+  --advertise-address="$TAILNET_IP" \
+  --tls-san="$TAILNET_IP" \
+  --flannel-iface=tailscale0 \
+  --disable=traefik

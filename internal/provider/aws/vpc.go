@@ -219,15 +219,23 @@ func (p *Provider) ensureSecurityGroups(ctx context.Context, name, env, vpcID st
 	}
 
 	adminCIDR := p.adminCIDR()
-	// Server ingress: 6443 from workers + admin; 10250 intra-cluster.
+	// Server ingress: 6443 from workers + admin; 10250 intra-cluster; etcd
+	// peer/client ports intra-server only; flannel VXLAN for pod traffic.
 	rules := []ec2types.IpPermission{
 		intraSG(6443, 6443, server),
 		intraSG(6443, 6443, worker),
 		intraSG(10250, 10250, server),
 		intraSG(10250, 10250, worker),
-		// flannel VXLAN for inter-node pod traffic
-		intraSG(8472, 8472, server),
-		intraSG(8472, 8472, worker),
+		// etcd client (2379) + peer (2380) — required for HA embedded etcd
+		// quorum across the 3 control plane nodes.
+		intraSG(2379, 2380, server),
+		// flannel VXLAN for inter-node pod traffic — UDP, not TCP.
+		intraSGUDP(8472, 8472, server),
+		intraSGUDP(8472, 8472, worker),
+		// NLB ENIs aren't in any SG; target health checks come from VPC IPs,
+		// so allow 6443 from the VPC CIDR. Same-VPC clients are already
+		// implicitly trusted; this just makes NLB health checks pass.
+		cidrRule(6443, 6443, vpcCIDR),
 	}
 	if adminCIDR != "" {
 		rules = append(rules, cidrRule(6443, 6443, adminCIDR), cidrRule(22, 22, adminCIDR))
@@ -240,8 +248,8 @@ func (p *Provider) ensureSecurityGroups(ctx context.Context, name, env, vpcID st
 	if err := p.authorizeIngress(ctx, worker, []ec2types.IpPermission{
 		intraSG(10250, 10250, server),
 		intraSG(10250, 10250, worker),
-		intraSG(8472, 8472, server),
-		intraSG(8472, 8472, worker),
+		intraSGUDP(8472, 8472, server),
+		intraSGUDP(8472, 8472, worker),
 	}); err != nil {
 		return "", "", fmt.Errorf("worker SG rules: %w", err)
 	}
@@ -288,6 +296,15 @@ func (p *Provider) adminCIDR() string {
 func intraSG(from, to int32, sgID string) ec2types.IpPermission {
 	return ec2types.IpPermission{
 		IpProtocol:       aws.String("tcp"),
+		FromPort:         aws.Int32(from),
+		ToPort:           aws.Int32(to),
+		UserIdGroupPairs: []ec2types.UserIdGroupPair{{GroupId: aws.String(sgID)}},
+	}
+}
+
+func intraSGUDP(from, to int32, sgID string) ec2types.IpPermission {
+	return ec2types.IpPermission{
+		IpProtocol:       aws.String("udp"),
 		FromPort:         aws.Int32(from),
 		ToPort:           aws.Int32(to),
 		UserIdGroupPairs: []ec2types.UserIdGroupPair{{GroupId: aws.String(sgID)}},

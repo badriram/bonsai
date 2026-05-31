@@ -59,17 +59,12 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		return provider.PlatformOutputs{}, err
 	}
 
-	// HA control plane: provision the NLB so Part 2 (control plane ASG) has a
-	// stable endpoint to register against. The control plane itself is still
-	// single-instance + EIP in this PR — Part 2 wires the ASG.
-	if cfg.HAControl {
-		if _, err := p.ensureControlNLB(ctx, cfg.Name, cfg.Env, net); err != nil {
-			return provider.PlatformOutputs{}, fmt.Errorf("control NLB: %w", err)
-		}
-	}
-
 	backupBucket := "bonsai-backups-" + p.accountID()
-	instanceProfile, err := p.ensureIAM(ctx, cfg.Name, cfg.Env, backupBucket)
+	var extraSSMReads []string
+	if cfg.TailnetMode() {
+		extraSSMReads = append(extraSSMReads, cfg.TailnetKeySSMPath)
+	}
+	instanceProfile, err := p.ensureIAM(ctx, cfg.Name, cfg.Env, backupBucket, extraSSMReads...)
 	if err != nil {
 		return provider.PlatformOutputs{}, err
 	}
@@ -78,25 +73,69 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		return provider.PlatformOutputs{}, err
 	}
 
-	eip, err := p.ensureControlEIP(ctx, cfg.Name, cfg.Env)
-	if err != nil {
-		return provider.PlatformOutputs{}, err
+	var (
+		controlURL string
+		workerOpt  workerOpts
+	)
+	switch {
+	case cfg.HAControl && cfg.TailnetMode():
+		if err := p.ensureControlPlaneASG(ctx, controlPlaneHASpec{
+			Name: cfg.Name, Env: cfg.Env,
+			Net:               net,
+			InstanceProfile:   instanceProfile,
+			BackupBucket:      backupBucket,
+			TailnetURL:        cfg.TailnetURL,
+			TailnetKeySSMPath: cfg.TailnetKeySSMPath,
+			TailnetTag:        cfg.TailnetTag,
+		}); err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("control plane ASG (tailnet): %w", err)
+		}
+		// In tailnet mode the leader publishes its tailnet IP to SSM. The
+		// kubeconfig stored in SSM already points at it; the human-friendly
+		// CLUSTER_ENDPOINT we surface is best-effort here.
+		controlURL = "tailnet://" + cfg.TailnetURL
+		workerOpt = workerOpts{
+			TailnetURL: cfg.TailnetURL, TailnetKeySSMPath: cfg.TailnetKeySSMPath,
+			TailnetTag: cfg.TailnetTag,
+		}
+	case cfg.HAControl:
+		nlb, err := p.ensureControlNLB(ctx, cfg.Name, cfg.Env, net)
+		if err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("control NLB: %w", err)
+		}
+		if err := p.ensureControlPlaneASG(ctx, controlPlaneHASpec{
+			Name: cfg.Name, Env: cfg.Env,
+			Net:             net,
+			InstanceProfile: instanceProfile,
+			NLBDNS:          nlb.DNSName,
+			TargetGroupArn:  nlb.TargetGroupArn,
+			BackupBucket:    backupBucket,
+		}); err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("control plane ASG: %w", err)
+		}
+		controlURL = "https://" + nlb.DNSName + ":6443"
+		workerOpt = workerOpts{ControlPlaneURL: controlURL}
+	default:
+		eip, err := p.ensureControlEIP(ctx, cfg.Name, cfg.Env)
+		if err != nil {
+			return provider.PlatformOutputs{}, err
+		}
+		controlInstanceID, err := p.ensureControlPlane(ctx, controlPlaneSpec{
+			Name: cfg.Name, Env: cfg.Env,
+			Net:             net,
+			InstanceProfile: instanceProfile,
+			ControlIP:       eip.PublicIP,
+			BackupBucket:    backupBucket,
+		})
+		if err != nil {
+			return provider.PlatformOutputs{}, err
+		}
+		if err := p.associateControlEIP(ctx, eip, controlInstanceID); err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("associate control EIP: %w", err)
+		}
+		controlURL = "https://" + eip.PublicIP + ":6443"
+		workerOpt = workerOpts{ControlPlaneURL: controlURL}
 	}
-
-	controlInstanceID, err := p.ensureControlPlane(ctx, controlPlaneSpec{
-		Name: cfg.Name, Env: cfg.Env,
-		Net:             net,
-		InstanceProfile: instanceProfile,
-		ControlIP:       eip.PublicIP,
-		BackupBucket:    backupBucket,
-	})
-	if err != nil {
-		return provider.PlatformOutputs{}, err
-	}
-	if err := p.associateControlEIP(ctx, eip, controlInstanceID); err != nil {
-		return provider.PlatformOutputs{}, fmt.Errorf("associate control EIP: %w", err)
-	}
-	controlURL := "https://" + eip.PublicIP + ":6443"
 
 	if err := p.waitForK3sReady(ctx, cfg.Name, cfg.Env); err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("control plane never became ready: %w", err)
@@ -106,7 +145,7 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	if workerCount < 1 {
 		workerCount = 1
 	}
-	if err := p.ensureWorkers(ctx, cfg.Name, cfg.Env, workerCount, net, instanceProfile, controlURL); err != nil {
+	if err := p.ensureWorkers(ctx, cfg.Name, cfg.Env, workerCount, net, instanceProfile, workerOpt); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
 

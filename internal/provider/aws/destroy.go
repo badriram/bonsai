@@ -29,6 +29,8 @@ func (p *Provider) Destroy(ctx context.Context, name, env string) error {
 	}{
 		{"asg", func() error { return p.destroyASG(ctx, name, env) }},
 		{"launch-template", func() error { return p.destroyLaunchTemplate(ctx, name, env) }},
+		{"control-asg", func() error { return p.destroyControlPlaneASG(ctx, name, env) }},
+		{"control-launch-template", func() error { return p.destroyControlPlaneLT(ctx, name, env) }},
 		{"control-plane", func() error { return p.destroyControlPlane(ctx, name, env) }},
 		{"control-nlb", func() error { return p.destroyControlNLB(ctx, name, env) }},
 		{"control-eip", func() error { return p.releaseControlEIP(ctx, name, env) }},
@@ -89,6 +91,36 @@ func (p *Provider) waitForASGGone(ctx context.Context, asgName string) error {
 		}
 	}
 	return fmt.Errorf("asg %s did not delete within 10m", asgName)
+}
+
+func (p *Provider) destroyControlPlaneASG(ctx context.Context, name, env string) error {
+	asgName := haControlPlaneASGName(name, env)
+	out, err := p.asg.DescribeAutoScalingGroups(ctx, &autoscaling.DescribeAutoScalingGroupsInput{
+		AutoScalingGroupNames: []string{asgName},
+	})
+	if err != nil {
+		return err
+	}
+	if len(out.AutoScalingGroups) == 0 {
+		return nil
+	}
+	if _, err := p.asg.DeleteAutoScalingGroup(ctx, &autoscaling.DeleteAutoScalingGroupInput{
+		AutoScalingGroupName: aws.String(asgName),
+		ForceDelete:          aws.Bool(true),
+	}); err != nil {
+		return err
+	}
+	return p.waitForASGGone(ctx, asgName)
+}
+
+func (p *Provider) destroyControlPlaneLT(ctx context.Context, name, env string) error {
+	_, err := p.ec2.DeleteLaunchTemplate(ctx, &ec2.DeleteLaunchTemplateInput{
+		LaunchTemplateName: aws.String(haControlPlaneLTName(name, env)),
+	})
+	if err != nil && !isNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 func (p *Provider) destroyLaunchTemplate(ctx context.Context, name, env string) error {
@@ -265,11 +297,34 @@ func (p *Provider) destroySubnet(ctx context.Context, name, env string) error {
 		return err
 	}
 	for _, s := range out.Subnets {
-		if _, err := p.ec2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{SubnetId: s.SubnetId}); err != nil && !isNotFound(err) {
-			return fmt.Errorf("delete subnet %s: %w", aws.ToString(s.SubnetId), err)
+		// NLB deletion is async — its ENIs in the subnet can take 30-60s to
+		// detach. Subnet delete returns DependencyViolation in that window.
+		// Retry for up to 90s before giving up.
+		deadline := time.Now().Add(90 * time.Second)
+		for {
+			_, err := p.ec2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{SubnetId: s.SubnetId})
+			if err == nil || isNotFound(err) {
+				break
+			}
+			if !isDependencyViolation(err) || time.Now().After(deadline) {
+				return fmt.Errorf("delete subnet %s: %w", aws.ToString(s.SubnetId), err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(10 * time.Second):
+			}
 		}
 	}
 	return nil
+}
+
+func isDependencyViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr interface{ ErrorCode() string }
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "DependencyViolation"
 }
 
 func (p *Provider) destroyIGW(ctx context.Context, name, env string) error {

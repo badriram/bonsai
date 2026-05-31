@@ -15,9 +15,14 @@ command -v aws >/dev/null 2>&1 || {
 
 # k3s server. Phase 1: embedded SQLite (single-node).
 # Phase 3 swaps in --cluster-init for embedded etcd HA.
+# IMDSv2 — works whether the instance enforces v2 or just allows v1.
+IMDS_TOKEN="$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")"
+imds() { curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
+
 curl -sfL https://get.k3s.io | sh -s - server \
   --write-kubeconfig-mode=0644 \
-  --tls-san="$(curl -s http://169.254.169.254/latest/meta-data/public-hostname)" \
+  --tls-san="$(imds public-hostname)" \
   --disable=traefik
 
 # Publish the cluster join token so workers can find it.
@@ -30,7 +35,7 @@ aws ssm put-parameter \
   --overwrite
 
 # Publish the cluster API endpoint (public hostname).
-ENDPOINT="https://$(curl -s http://169.254.169.254/latest/meta-data/public-hostname):6443"
+ENDPOINT="https://$(imds public-hostname):6443"
 aws ssm put-parameter \
   --region "$REGION" \
   --name "/bonsai/${NAME}/${ENV}/cluster_endpoint" \
@@ -40,7 +45,7 @@ aws ssm put-parameter \
 
 # Publish kubeconfig with the API server rewritten to the public hostname so
 # operators can connect from outside the VPC.
-KUBECFG="$(sed "s|127.0.0.1|$(curl -s http://169.254.169.254/latest/meta-data/public-hostname)|g" /etc/rancher/k3s/k3s.yaml)"
+KUBECFG="$(sed "s|127.0.0.1|$(imds public-hostname)|g" /etc/rancher/k3s/k3s.yaml)"
 aws ssm put-parameter \
   --region "$REGION" \
   --name "/bonsai/${NAME}/${ENV}/kubeconfig" \

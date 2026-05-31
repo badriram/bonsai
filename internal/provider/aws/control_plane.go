@@ -16,7 +16,7 @@ import (
 // Phase 1: single EC2 in the public subnet, k3s server with embedded SQLite.
 // Phase 3 replaces this with a 3-node ASG behind an NLB, embedded etcd.
 
-const defaultControlPlaneInstanceType = "t3.small"
+const defaultControlPlaneInstanceType = "t4g.small"
 
 // controlPlaneSpec carries everything ensureControlPlane needs to either find
 // the current instance or launch a fresh one.

@@ -1,0 +1,100 @@
+#!/bin/sh
+# k3s server bootstrap for HA control plane (embedded etcd).
+#
+# All 3 ASG instances run this. They race for an SSM lock; the winner runs
+# --cluster-init and publishes outputs, the losers wait for the NLB to go
+# healthy and join via --server. The lock is sticky, so on later
+# replacements (rotate-control = ASG instance refresh) new instances always
+# take the join path — etcd quorum already exists.
+set -eu
+
+NAME="{{.Name}}"
+ENV="{{.Env}}"
+REGION="{{.Region}}"
+NLB_DNS="{{.NLBDNS}}"
+BACKUP_BUCKET="{{.BackupBucket}}"
+
+LEADER_KEY="/bonsai/${NAME}/${ENV}/etcd-init-leader"
+TOKEN_KEY="/bonsai/${NAME}/${ENV}/token"
+KUBECONFIG_KEY="/bonsai/${NAME}/${ENV}/kubeconfig"
+ENDPOINT_KEY="/bonsai/${NAME}/${ENV}/cluster_endpoint"
+
+command -v aws >/dev/null 2>&1 || {
+  if command -v dnf >/dev/null; then dnf install -y awscli >/dev/null
+  elif command -v apk >/dev/null; then apk add --no-cache aws-cli >/dev/null
+  fi
+}
+
+# IMDSv2 — AL2023 launch templates default to token-required, so v1 calls
+# return empty silently. Get a v2 token once and use it for every IMDS call.
+IMDS_TOKEN="$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")"
+INSTANCE_ID="$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id)"
+
+# Cluster token is pre-seeded by Bonsai before the ASG is created; both leader
+# and joiners read it from SSM.
+TOKEN="$(aws ssm get-parameter \
+  --region "$REGION" --name "$TOKEN_KEY" --with-decryption \
+  --query Parameter.Value --output text)"
+
+# Race for the leader lock. PutParameter with --no-overwrite is atomic at the
+# SSM API; exactly one instance wins.
+if aws ssm put-parameter \
+     --region "$REGION" --name "$LEADER_KEY" --type String \
+     --value "$INSTANCE_ID" --no-overwrite >/dev/null 2>&1; then
+  ROLE="leader"
+else
+  ROLE="joiner"
+fi
+
+if [ "$ROLE" = "leader" ]; then
+  curl -sfL https://get.k3s.io | K3S_TOKEN="$TOKEN" sh -s - server \
+    --cluster-init \
+    --write-kubeconfig-mode=0644 \
+    --tls-san="$NLB_DNS" \
+    --disable=traefik
+
+  # Publish the join token (k3s rewrites /var/lib/rancher/k3s/server/node-token
+  # to a value that includes the CA hash; joiners need that one, not the raw
+  # cluster secret).
+  NODE_TOKEN="$(cat /var/lib/rancher/k3s/server/node-token)"
+  aws ssm put-parameter --region "$REGION" --name "$TOKEN_KEY" \
+    --type SecureString --value "$NODE_TOKEN" --overwrite >/dev/null
+
+  ENDPOINT="https://${NLB_DNS}:6443"
+  aws ssm put-parameter --region "$REGION" --name "$ENDPOINT_KEY" \
+    --type String --value "$ENDPOINT" --overwrite >/dev/null
+
+  KUBECFG="$(sed "s|127.0.0.1|${NLB_DNS}|g" /etc/rancher/k3s/k3s.yaml)"
+  aws ssm put-parameter --region "$REGION" --name "$KUBECONFIG_KEY" \
+    --type SecureString --value "$KUBECFG" --overwrite >/dev/null
+  exit 0
+fi
+
+# Joiner: wait for the NLB to start returning healthy (means the leader's k3s
+# is up and the TG has registered it). Then wait for the leader to have
+# published the node-token (so we use the CA-hashed value, not the seed).
+for i in $(seq 1 90); do
+  if curl -sk --max-time 5 "https://${NLB_DNS}:6443/healthz" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 10
+done
+
+# Re-read the token; leader may have overwritten the seed with the node-token.
+for i in $(seq 1 30); do
+  CUR="$(aws ssm get-parameter --region "$REGION" --name "$TOKEN_KEY" \
+    --with-decryption --query Parameter.Value --output text 2>/dev/null || true)"
+  if [ -n "$CUR" ] && [ "$CUR" != "$TOKEN" ]; then
+    TOKEN="$CUR"
+    break
+  fi
+  sleep 5
+done
+
+curl -sfL https://get.k3s.io | K3S_TOKEN="$TOKEN" sh -s - server \
+  --server "https://${NLB_DNS}:6443" \
+  --write-kubeconfig-mode=0644 \
+  --tls-san="$NLB_DNS" \
+  --disable=traefik

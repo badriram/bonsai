@@ -22,9 +22,13 @@ func chartCNPG() chartSpec {
 }
 
 func chartValkey(appNamespace string) chartSpec {
+	// Bitnami's HTTP chart repo at charts.bitnami.com/bitnami started returning
+	// 403 in 2025 (post-Broadcom acquisition). The OCI registry at
+	// registry-1.docker.io/bitnamicharts is the official replacement for
+	// public access — no auth required, just the OCI URL as the chart ref.
 	return chartSpec{
 		Release: "valkey", Namespace: appNamespace,
-		RepoURL: "https://charts.bitnami.com/bitnami", Chart: "valkey", Version: "2.4.1",
+		Chart: "oci://registry-1.docker.io/bitnamicharts/valkey", Version: "6.0.4",
 		Values: map[string]any{
 			"auth":         map[string]any{"enabled": false},
 			"architecture": "standalone",

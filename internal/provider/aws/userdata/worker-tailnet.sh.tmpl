@@ -1,0 +1,70 @@
+#!/bin/sh
+# k3s worker bootstrap on operator's tailnet. Joins the tailnet first,
+# then reads the control plane's tailnet IP from SSM and joins k3s.
+set -eu
+
+NAME="{{.Name}}"
+ENV="{{.Env}}"
+REGION="{{.Region}}"
+TAILNET_URL="{{.TailnetURL}}"
+TAILNET_KEY_SSM="{{.TailnetKeySSMPath}}"
+TAILNET_TAG="{{.TailnetTag}}"
+
+command -v aws >/dev/null 2>&1 || {
+  if command -v dnf >/dev/null; then dnf install -y awscli >/dev/null
+  elif command -v apk >/dev/null; then apk add --no-cache aws-cli >/dev/null
+  fi
+}
+
+IMDS_TOKEN="$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")"
+INSTANCE_ID="$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id)"
+
+curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
+TAILNET_CRED="$(aws ssm get-parameter --region "$REGION" \
+  --name "$TAILNET_KEY_SSM" --with-decryption \
+  --query Parameter.Value --output text)"
+case "$TAILNET_CRED" in
+  tskey-client-*)
+    TAILNET_AUTHKEY="${TAILNET_CRED}?ephemeral=true&preauthorized=true"
+    TAILNET_TAG_FLAGS="--advertise-tags=${TAILNET_TAG}"
+    ;;
+  *)
+    TAILNET_AUTHKEY="$TAILNET_CRED"
+    TAILNET_TAG_FLAGS=""
+    ;;
+esac
+tailscale up \
+  --authkey="$TAILNET_AUTHKEY" \
+  --login-server="$TAILNET_URL" \
+  --hostname="bonsai-${NAME}-${ENV}-worker-${INSTANCE_ID}" \
+  $TAILNET_TAG_FLAGS \
+  --accept-routes
+TAILNET_IP="$(tailscale ip -4)"
+
+# Wait for the leader to have published its tailnet IP.
+for i in $(seq 1 90); do
+  CONTROL_IP="$(aws ssm get-parameter --region "$REGION" \
+    --name /bonsai/${NAME}/${ENV}/control-tailnet-ip \
+    --query Parameter.Value --output text 2>/dev/null || true)"
+  [ -n "${CONTROL_IP:-}" ] && break
+  sleep 10
+done
+[ -n "${CONTROL_IP:-}" ] || { echo "control tailnet IP never appeared"; exit 1; }
+
+# Wait for the join token (leader writes it after cluster init).
+for i in $(seq 1 60); do
+  TOKEN="$(aws ssm get-parameter --region "$REGION" \
+    --name "/bonsai/${NAME}/${ENV}/token" --with-decryption \
+    --query Parameter.Value --output text 2>/dev/null || true)"
+  [ -n "${TOKEN:-}" ] && break
+  sleep 10
+done
+[ -n "${TOKEN:-}" ] || { echo "join token never appeared"; exit 1; }
+
+curl -sfL https://get.k3s.io | \
+  K3S_URL="https://${CONTROL_IP}:6443" \
+  K3S_TOKEN="$TOKEN" \
+  INSTALL_K3S_EXEC="agent --node-ip=${TAILNET_IP} --flannel-iface=tailscale0" \
+  sh -

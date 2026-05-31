@@ -102,7 +102,16 @@ func (p *Provider) ensureTargetGroup(ctx context.Context, name, env, vpcID strin
 		Names: []string{tgName},
 	})
 	if err == nil && len(existing.TargetGroups) > 0 {
-		return &existing.TargetGroups[0], nil
+		tg := &existing.TargetGroups[0]
+		if _, err := p.elbv2.ModifyTargetGroupAttributes(ctx, &elasticloadbalancingv2.ModifyTargetGroupAttributesInput{
+			TargetGroupArn: tg.TargetGroupArn,
+			Attributes: []elbtypes.TargetGroupAttribute{
+				{Key: aws.String("preserve_client_ip.enabled"), Value: aws.String("false")},
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("set client IP preservation: %w", err)
+		}
+		return tg, nil
 	}
 	if err != nil && !isELBNotFound(err) {
 		return nil, err
@@ -125,7 +134,21 @@ func (p *Provider) ensureTargetGroup(ctx context.Context, name, env, vpcID strin
 	if err != nil {
 		return nil, err
 	}
-	return &out.TargetGroups[0], nil
+	tg := &out.TargetGroups[0]
+	// In-VPC clients (workers + control plane joiners) hit this NLB DNS too.
+	// With client IP preservation enabled (the default for instance targets),
+	// the target's response goes direct to the source IP instead of back
+	// through the NLB, so the TCP handshake never completes when source and
+	// target are in the same VPC. Disable preservation so the NLB SNATs.
+	if _, err := p.elbv2.ModifyTargetGroupAttributes(ctx, &elasticloadbalancingv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: tg.TargetGroupArn,
+		Attributes: []elbtypes.TargetGroupAttribute{
+			{Key: aws.String("preserve_client_ip.enabled"), Value: aws.String("false")},
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("disable client IP preservation: %w", err)
+	}
+	return tg, nil
 }
 
 func (p *Provider) ensureListener(ctx context.Context, nlbArn, tgArn string) error {

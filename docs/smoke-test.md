@@ -188,6 +188,160 @@ bonsai rotate-control --advanced --provider <PROVIDER> --name $NAME --env $ENV
 `Ready` after the new control plane comes up. CNPG cluster reconciles
 (may show `pg_isready` blips in logs during the API outage).
 
+## Phase 2.5: HA control plane (AWS only)
+
+Skip if you're not testing `--ha-control`. Runs after a clean destroy of the
+single-node cluster (or in a fresh `NAME`/`ENV` to avoid the EIP→NLB
+switchover edge case).
+
+### H1. `grow --ha-control` — fresh HA provision
+
+```sh
+bonsai grow --provider aws --name $NAME --env $ENV --workers 2 --ha-control
+```
+
+**What's different from step 1:**
+- VPC now has 3 subnets, one per AZ (`describe-subnets` confirms).
+- Internet-facing NLB on TCP:6443 (`describe-load-balancers`).
+- Control plane is a 3-instance ASG named `bonsai-$NAME-$ENV-control`, not
+  a single EC2 with an EIP.
+- `CLUSTER_ENDPOINT` is the NLB DNS, not a raw IP.
+
+**Expected timing:** 10–14 minutes (3 control nodes need to elect + join via
+SSM-lock before workers see a healthy API).
+
+**Watch for cluster-init race:**
+- One control instance wins `/bonsai/$NAME/$ENV/etcd-init-leader` —
+  `aws ssm get-parameter --name /bonsai/$NAME/$ENV/etcd-init-leader`
+  shows that instance ID. The other two should NOT have run `--cluster-init`
+  (check `journalctl -u k3s` on each via SSM Session Manager — they should
+  show `--server https://...:6443` in the args).
+
+### H2. Cluster sees 3 control nodes
+
+```sh
+aws ssm get-parameter --name /bonsai/$NAME/$ENV/kubeconfig --with-decryption \
+  --query Parameter.Value --output text > /tmp/kc-ha
+KUBECONFIG=/tmp/kc-ha kubectl get nodes
+```
+
+**Expected:** 3 `control-plane,etcd,master` nodes + 2 workers, all `Ready`.
+
+### H3. Kill a control node — API survives
+
+```sh
+# Terminate one control instance; ASG replaces it
+aws ec2 describe-instances \
+  --filters Name=tag:bonsai:cluster,Values=$NAME Name=tag:bonsai:role,Values=control-plane Name=instance-state-name,Values=running \
+  --query 'Reservations[].Instances[0].InstanceId' --output text | head -1 | \
+  xargs -I {} aws ec2 terminate-instances --instance-ids {}
+
+# kubectl should keep responding throughout
+while sleep 5; do KUBECONFIG=/tmp/kc-ha kubectl get nodes -o name; echo "---"; done
+```
+
+**Expected:** kubectl never errors out. The terminated node disappears from
+`kubectl get nodes`, the ASG launches a replacement (~3 min), and it rejoins
+as a fresh etcd member (the SSM-lock is held, so it takes the `--server`
+join path).
+
+### H4. `rotate-control` — rolling instance refresh, zero API downtime
+
+```sh
+bonsai bake-image --provider aws  # produce a fresh AMI
+bonsai rotate-control --advanced --provider aws --name $NAME --env $ENV
+```
+
+**Expected:** triggers an ASG instance refresh with
+`MinHealthyPercentage=67` so 2 of 3 stay up at all times. Watch:
+
+```sh
+aws autoscaling describe-instance-refreshes \
+  --auto-scaling-group-name bonsai-$NAME-$ENV-control
+```
+
+API stays available the whole time (etcd quorum = 2 of 3).
+
+### H5. Destroy
+
+`bonsai destroy --advanced` already handles the HA path. Verify cleanup
+also covers:
+- `aws elbv2 describe-load-balancers` — no `bonsai-$NAME-$ENV` NLB
+- `aws autoscaling describe-auto-scaling-groups` — no
+  `bonsai-$NAME-$ENV-control` ASG
+- `aws ec2 describe-launch-templates` — no `bonsai-$NAME-$ENV-control` LT
+- All 3 subnets gone.
+
+## Phase 2.6: HA + tailnet (BYO headscale/tailscale)
+
+Skip if not testing tailnet mode. Operator-supplied tailnet replaces the
+NLB and admin-CIDR machinery entirely.
+
+### Prerequisites
+
+- A headscale instance OR Tailscale Cloud account.
+- A device tag defined in your tailnet ACL (e.g. `tag:bonsai`) — operators
+  pre-approved to use it.
+- **Recommended:** an OAuth client scoped to `auth_keys:write` with tag
+  `tag:bonsai`. Stored as SecureString:
+  ```sh
+  # in Tailscale admin: Settings → OAuth clients → Generate OAuth client
+  # capability: Devices > Keys > Write, tags: tag:bonsai
+  aws ssm put-parameter --name /myorg/secrets/tailnet-key \
+    --type SecureString --value 'tskey-client-...'
+  ```
+  Each node mints its own one-shot ephemeral key on boot and is auto-pruned
+  from the tailnet when the instance dies. No key rotation needed.
+
+  **Or** a reusable pre-auth key (`tskey-auth-...`) — works the same in user-data
+  but you'll need to rotate every 90 days and prune dead nodes manually.
+
+### T1. `grow --ha-control` with tailnet flags
+
+```sh
+bonsai grow --provider aws --name $NAME --env $ENV --workers 2 \
+  --ha-control \
+  --tailnet-url=https://headscale.example.com \
+  --tailnet-key-ssm=/myorg/secrets/tailnet-key \
+  --tailnet-tag=tag:bonsai
+```
+
+**What's different from H1:**
+- No NLB provisioned (~$53/mo saved).
+- No `BONSAI_ADMIN_CIDR` SG rules — public 6443 is closed.
+- Each control plane + worker installs tailscale on boot and joins your
+  tailnet. The leader publishes its tailnet IP to
+  `/bonsai/$NAME/$ENV/control-tailnet-ip`; joiners + workers read it.
+- Kubeconfig server URL is the leader's tailnet IP.
+
+### T2. kubectl from anywhere on the tailnet
+
+```sh
+aws ssm get-parameter --name /bonsai/$NAME/$ENV/kubeconfig --with-decryption \
+  --query Parameter.Value --output text > /tmp/kc-tn
+KUBECONFIG=/tmp/kc-tn kubectl get nodes
+```
+
+Your laptop just needs to be on the tailnet (`tailscale up` on the same
+network). No SG holes, no IP staleness, no NLB.
+
+### T3. Verify in your tailnet UI
+
+Headscale: `headscale nodes list` — should show 3 `bonsai-$NAME-$ENV-*`
+control plane entries + 2 worker entries.
+
+### T4. Destroy
+
+`bonsai destroy --advanced` works the same — terminates the ASG and ALL
+the rest.
+
+- **With OAuth client + ephemeral keys** (recommended): nodes go offline
+  on terminate; Tailscale auto-removes them from the tailnet ~5 min later.
+  Nothing to clean up.
+- **With pre-auth keys**: instances die without `tailscale logout`, so
+  ghost machines will linger in headscale until you prune them
+  (`headscale nodes expire $node_id`).
+
 ## Phase 3: teardown
 
 ### 12. `destroy`

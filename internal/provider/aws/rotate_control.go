@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	asgtypes "github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -28,6 +30,13 @@ import (
 // Workers are not rotated — same IP, same token, same cluster identity.
 // API downtime is the duration of steps 2–5 (typically 4–6 minutes).
 func (p *Provider) RotateControl(ctx context.Context, name, env string) error {
+	ha, err := p.haControlPlaneASGExists(ctx, name, env)
+	if err != nil {
+		return fmt.Errorf("detect HA control plane: %w", err)
+	}
+	if ha {
+		return p.rotateControlHA(ctx, name, env)
+	}
 	current, err := p.findRunningInstance(ctx, name, env, "control-plane")
 	if err != nil {
 		return err
@@ -78,6 +87,33 @@ func (p *Provider) RotateControl(ctx context.Context, name, env string) error {
 		return fmt.Errorf("re-associate EIP: %w", err)
 	}
 	return p.waitForK3sReady(ctx, name, env)
+}
+
+// rotateControlHA replaces the 3 HA control plane nodes via ASG instance
+// refresh. etcd quorum carries cluster state across replacements, so no
+// snapshot/restore is needed — new instances boot, lose the SSM-lock race,
+// and join via --server. MinHealthyPercentage=67 keeps 2 of 3 up at all
+// times so quorum is preserved and the API stays available.
+func (p *Provider) rotateControlHA(ctx context.Context, name, env string) error {
+	amiID, err := p.resolveNodeAMI(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve AMI: %w", err)
+	}
+	if err := p.bumpLaunchTemplateAMI(ctx, haControlPlaneLTName(name, env), amiID); err != nil {
+		return fmt.Errorf("bump control LT: %w", err)
+	}
+	_, err = p.asg.StartInstanceRefresh(ctx, &autoscaling.StartInstanceRefreshInput{
+		AutoScalingGroupName: aws.String(haControlPlaneASGName(name, env)),
+		Strategy:             asgtypes.RefreshStrategyRolling,
+		Preferences: &asgtypes.RefreshPreferences{
+			MinHealthyPercentage: aws.Int32(67),
+			InstanceWarmup:       aws.Int32(300),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("start control instance refresh: %w", err)
+	}
+	return nil
 }
 
 // snapshotControlPlaneState issues an SSM Run Command that stops k3s, tars

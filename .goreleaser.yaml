@@ -66,9 +66,11 @@ release:
 # so `brew install badriram/tools/bonsai` resolves to the latest release.
 brews:
   - name: bonsai
+    directory: Formula
     repository:
       owner: badriram
       name: homebrew-tools
+      branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/badriram/bonsai"
     description: "Cheap, opinionated Kubernetes provisioner for small teams (AWS, Hetzner)"

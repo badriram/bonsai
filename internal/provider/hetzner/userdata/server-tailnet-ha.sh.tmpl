@@ -38,31 +38,36 @@ runcmd:
       --accept-routes
     TAILNET_IP="$(tailscale ip -4)"
 
-    {{if .IsLeader}}
-    curl -sfL https://get.k3s.io | \
-      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
-      K3S_TOKEN="{{.Token}}" \
-      sh -s - server \
-      --cluster-init \
-      --write-kubeconfig-mode=0644 \
-      --node-ip="$TAILNET_IP" \
-      --advertise-address="$TAILNET_IP" \
-      --tls-san="$TAILNET_IP" \
-      --flannel-iface=tailscale0 \
-      --disable=traefik
-    {{else}}
-    # Joiner — leader's tailnet IP was baked in at render time by Bonsai
-    # after it SSHed into the leader and ran `tailscale ip -4`.
-    curl -sfL https://get.k3s.io | \
-      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
-      K3S_TOKEN="{{.Token}}" \
-      sh -s - server \
-      --server "https://{{.LeaderTailnetIP}}:6443" \
-      --write-kubeconfig-mode=0644 \
-      --node-ip="$TAILNET_IP" \
-      --advertise-address="$TAILNET_IP" \
-      --tls-san="$TAILNET_IP" \
-      --flannel-iface=tailscale0 \
-      --disable=traefik
-    {{end}}
+    # Retry the k3s install on transient GitHub download failures.
+    # Cloud-init runs once; a flaky CDN moment otherwise kills the boot.
+    install_k3s() {
+      curl -sfL https://get.k3s.io | \
+        INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+        K3S_TOKEN="{{.Token}}" \
+        sh -s - "$@"
+    }
+    for attempt in 1 2 3 4 5; do
+      {{if .IsLeader}}
+      install_k3s server \
+        --cluster-init \
+        --write-kubeconfig-mode=0644 \
+        --node-ip="$TAILNET_IP" \
+        --advertise-address="$TAILNET_IP" \
+        --tls-san="$TAILNET_IP" \
+        --flannel-iface=tailscale0 \
+        --disable=traefik && break
+      {{else}}
+      install_k3s server \
+        --server "https://{{.LeaderTailnetIP}}:6443" \
+        --write-kubeconfig-mode=0644 \
+        --node-ip="$TAILNET_IP" \
+        --advertise-address="$TAILNET_IP" \
+        --tls-san="$TAILNET_IP" \
+        --flannel-iface=tailscale0 \
+        --disable=traefik && break
+      {{end}}
+      echo "bonsai: k3s install attempt $attempt failed; retrying in $((attempt*5))s" >&2
+      sleep $((attempt * 5))
+    done
+    systemctl is-active k3s >/dev/null || { echo "bonsai: k3s never became active" >&2; exit 1; }
     touch /var/lib/bonsai-server-ready

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -83,6 +84,7 @@ func (p *Provider) putInlinePolicy(ctx context.Context, roleName, policyName, do
 }
 
 func (p *Provider) ensureInstanceProfile(ctx context.Context, roleName string) error {
+	created := false
 	_, err := p.iam.GetInstanceProfile(ctx, &iam.GetInstanceProfileInput{InstanceProfileName: aws.String(roleName)})
 	if err != nil {
 		var nse *iamtypes.NoSuchEntityException
@@ -94,16 +96,55 @@ func (p *Provider) ensureInstanceProfile(ctx context.Context, roleName string) e
 		}); err != nil {
 			return err
 		}
+		created = true
 	}
 	_, err = p.iam.AddRoleToInstanceProfile(ctx, &iam.AddRoleToInstanceProfileInput{
 		InstanceProfileName: aws.String(roleName),
 		RoleName:            aws.String(roleName),
 	})
 	var lee *iamtypes.LimitExceededException
+	roleNewlyAttached := err == nil
 	if err != nil && !errors.As(err, &lee) {
 		// LimitExceeded is the error when the role is already attached
 		// (an instance profile holds at most one role).
 		return err
+	}
+	// IAM is eventually consistent across services. New (or freshly
+	// role-attached) instance profiles are routinely rejected by EC2/ASG
+	// with "Invalid IAM Instance Profile name" for the first 30-60s. Wait
+	// for the profile to become visible to EC2 by polling DescribeInstances
+	// with a dry-run validate, then sleeping a small buffer.
+	if created || roleNewlyAttached {
+		if err := p.waitForInstanceProfilePropagation(ctx, roleName); err != nil {
+			return fmt.Errorf("wait for instance profile %s propagation: %w", roleName, err)
+		}
+	}
+	return nil
+}
+
+// waitForInstanceProfilePropagation polls until the IAM service confirms the
+// role is attached, then sleeps a buffer for the EC2/ASG side caches. AWS
+// has no direct probe for "is this profile visible to EC2" so the sleep is
+// empirical (~15s covers the steady-state case).
+func (p *Provider) waitForInstanceProfilePropagation(ctx context.Context, roleName string) error {
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := p.iam.GetInstanceProfile(ctx, &iam.GetInstanceProfileInput{
+			InstanceProfileName: aws.String(roleName),
+		})
+		if err == nil && out.InstanceProfile != nil && len(out.InstanceProfile.Roles) > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(15 * time.Second):
 	}
 	return nil
 }

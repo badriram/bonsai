@@ -342,6 +342,89 @@ the rest.
   ghost machines will linger in headscale until you prune them
   (`headscale nodes expire $node_id`).
 
+## Phase 2.7: Hetzner HA (LB mode)
+
+Skip if not testing Hetzner HA. Requires `HCLOUD_TOKEN` env var with project
+admin scope.
+
+### HZ1. `grow --ha-control` on Hetzner
+
+```sh
+export HCLOUD_TOKEN=...
+export BONSAI_ADMIN_CIDR=$(curl -s -4 ifconfig.me)/32     # for SSH + LB-fronted 6443
+bonsai grow --provider hetzner --name $NAME --env $ENV --workers 2 --ha-control
+```
+
+**What gets created:**
+- Hetzner Network `bonsai-$NAME-$ENV` (10.0.0.0/16, subnets per location in eu-central)
+- Hetzner Cloud Firewall `bonsai-$NAME-$ENV` (intra-network etcd/kubelet/flannel + admin 22/6443)
+- Hetzner Load Balancer `bonsai-$NAME-$ENV` (lb11, ~€5/mo) on TCP:6443
+- 3 control plane Servers (`cx22`) spread across `nbg1`, `fsn1`, `hel1`, all attached to the network + firewall
+- 2 worker Servers in the network
+
+**Expected timing:** 14–18 min (3 control planes sequenced — leader first, joiners after).
+
+### HZ2. Verify 3 etcd + 2 workers Ready
+
+```sh
+KUBECONFIG=~/.bonsai/$NAME-$ENV/kubeconfig kubectl get nodes -o wide
+```
+
+Should show 3 `control-plane,etcd` + 2 `<none>` (workers), all Ready.
+
+### HZ3. Confirm LB targets healthy
+
+```sh
+hcloud load-balancer describe bonsai-$NAME-$ENV
+```
+
+Look for `Targets:` block listing all 3 control planes as `healthy`.
+
+### HZ4. `rotate-control --advanced` — one-at-a-time replacement
+
+```sh
+bonsai rotate-control --advanced --provider hetzner --name $NAME --env $ENV
+```
+
+Each iteration: delete a server → wait 60s for etcd member cleanup → create
+replacement at same location → wait for k3s ready → reattach to LB. ~10 min
+total for the 3 nodes. kubectl never errors (2 of 3 stay up).
+
+### HZ5. Destroy
+
+```sh
+bonsai destroy --advanced --provider hetzner --name $NAME --env $ENV
+```
+
+Should sequence: LB → servers → floating IP → firewall → network → SSH key →
+local secret dir. `hcloud server list -l bonsai:cluster=$NAME` returns empty.
+
+## Phase 2.8: Hetzner HA + tailnet (BYO)
+
+Same prereqs as Phase 2.6 (Tailscale OAuth client + `tag:bonsai` in ACL), but
+the credential lives in a local file Bonsai reads at grow time (no SSM
+equivalent on Hetzner).
+
+```sh
+echo 'tskey-client-...' > ~/.bonsai/_secrets/tailnet-key
+chmod 600 ~/.bonsai/_secrets/tailnet-key
+
+bonsai grow --provider hetzner --name $NAME --env $ENV --workers 2 \
+  --ha-control \
+  --tailnet-url=https://controlplane.tailscale.com \
+  --tailnet-key-file=~/.bonsai/_secrets/tailnet-key \
+  --tailnet-tag=tag:bonsai
+```
+
+**What's different from HZ1:**
+- No Load Balancer provisioned (~€5/mo saved)
+- No public 6443 on cluster servers — only members of your tailnet reach the API
+- 5 nodes show up in your Tailscale admin under `tag:bonsai`
+
+Verification, rotate-control, and destroy follow the same H2–H5 shape as the
+AWS-tailnet sections (Phase 2.6) but reading kubeconfig from
+`~/.bonsai/$NAME-$ENV/kubeconfig` instead of SSM.
+
 ## Phase 3: teardown
 
 ### 12. `destroy`

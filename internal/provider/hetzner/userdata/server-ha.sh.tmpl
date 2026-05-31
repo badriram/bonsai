@@ -1,0 +1,47 @@
+#cloud-config
+# HA control plane node — Hetzner, LB mode.
+#
+# Bonsai imperatively decides leader vs joiner at render time (no SSM-lock
+# race needed — we're the orchestrator). Leader runs --cluster-init; joiners
+# come up later with --server + token baked in.
+#
+# Host key seeded by Bonsai via cloud-init's ssh_keys: module (runs before
+# sshd starts) so the operator's first SSH connect can pin with FixedHostKey
+# instead of falling back to TOFU.
+
+ssh_keys:
+  ed25519_private: |
+{{.HostKeyPrivateIndented}}
+  ed25519_public: '{{.HostKeyPublic}}'
+
+runcmd:
+  - |
+    set -eu
+    {{if .IsLeader}}
+    # Leader — initialize a fresh embedded-etcd cluster.
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+      K3S_TOKEN="{{.Token}}" \
+      sh -s - server \
+      --cluster-init \
+      --write-kubeconfig-mode=0644 \
+      --node-ip="{{.NodePrivateIP}}" \
+      --advertise-address="{{.NodePrivateIP}}" \
+      --tls-san="{{.ClusterEndpoint}}" \
+      --disable=traefik
+    {{else}}
+    # Joiner — register with the existing etcd cluster via the leader's
+    # private IP (HA LB doesn't help here since the leader is the only
+    # healthy target at this point).
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+      K3S_TOKEN="{{.Token}}" \
+      sh -s - server \
+      --server "https://{{.LeaderPrivateIP}}:6443" \
+      --write-kubeconfig-mode=0644 \
+      --node-ip="{{.NodePrivateIP}}" \
+      --advertise-address="{{.NodePrivateIP}}" \
+      --tls-san="{{.ClusterEndpoint}}" \
+      --disable=traefik
+    {{end}}
+    touch /var/lib/bonsai-server-ready

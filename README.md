@@ -24,6 +24,23 @@ git clone https://github.com/badriram/bonsai.git && cd bonsai
 make build      # ./bonsai is the binary
 ```
 
+## Local state — `BONSAI_DATA_DIR`
+
+Bonsai keeps per-cluster operator state (kubeconfig, SSH keys for Hetzner,
+secret store outputs) under `~/.bonsai/<name>-<env>/` by default. The kubeconfig
+and SSH keys are sensitive — chmod 0600, but plaintext.
+
+If you want them somewhere safer (encrypted volume, network share, secrets-managed
+filesystem), set `BONSAI_DATA_DIR` to that path. Bonsai treats it as opaque
+storage and stays out of how you secure it.
+
+```sh
+export BONSAI_DATA_DIR=/mnt/encrypted/bonsai          # LUKS, FileVault sparse bundle, gocryptfs, etc.
+export BONSAI_DATA_DIR=~/Sync/bonsai                  # team-shared via end-to-end encrypted sync
+```
+
+For most single-operator setups, full-disk encryption + the default path is fine.
+
 ## Quick start
 
 ```sh

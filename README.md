@@ -99,7 +99,7 @@ Cluster outputs:
 
 | | Description |
 |---|---|
-| **Compute** | k3s 1.31 on Graviton (`t4g.small`) by default on AWS; Ubuntu 24.04 on Hetzner (`cx22`) |
+| **Compute** | k3s 1.31 on Graviton (`t4g.small`) by default on AWS; Ubuntu 24.04 on Hetzner (`cpx22`, x86 AMD — `cax11` arm stock is too thin to default to) |
 | **Postgres** | CloudNativePG operator + a Postgres cluster you can connect to (S3-backed WAL on AWS) |
 | **KV** | Valkey single-pod, in-cluster |
 | **Cert mgmt** | cert-manager (cluster-issuer setup is yours) |
@@ -173,14 +173,16 @@ Everything else is autonomous or operator-driven.
 
 ## Status
 
+Current release: **v0.2.0** — Hetzner HA validated end-to-end on real Hetzner (3 control + 2 workers + LB, CNPG postgres healthy).
+
 | Phase | State |
 |---|---|
 | Phase 1 — AWS single-node | shipped |
 | Phase 2 — Hetzner provider | shipped |
 | Phase 3 Part 1 — multi-AZ + NLB scaffolding (AWS) | shipped |
 | Phase 3 Part 2 — HA control plane ASG + tailnet BYO (AWS) | shipped |
-| Phase 3 Part 3 — Hetzner HA + LB + tailnet | in progress |
-| Phase 4 — DigitalOcean + GCP providers | not started |
+| Phase 3 Part 3 — Hetzner HA + LB + tailnet | shipped + smoke-validated |
+| Phase 4 — DigitalOcean + GCP + libvirt providers | not started |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full picture.
 

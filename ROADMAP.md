@@ -78,10 +78,11 @@ used. Empty CIDR (e.g. switched to tailnet mode) revokes all.
   releases. Builds for `darwin/{amd64,arm64}` + `linux/{amd64,arm64}`,
   uploads tarballs + checksums to the GitHub release.
 - Homebrew tap publish: every tag produces a new `Formula/bonsai.rb` in
-  `badriram/homebrew-tap`. Users: `brew tap badriram/tap && brew install bonsai`.
-- One-time operator setup before first release: create empty
-  `github.com/badriram/homebrew-tap` repo + add a PAT (repo scope on the
-  tap) as the `HOMEBREW_TAP_GITHUB_TOKEN` secret on this repo.
+  `badriram/homebrew-tools` (the same tap that holds other formulae like
+`markdown-preview`). Users: `brew tap badriram/tools && brew install bonsai`.
+- One-time operator setup before first release: create a PAT with `repo`
+  scope on the existing `badriram/homebrew-tools` repo and add it as the
+  `HOMEBREW_TAP_GITHUB_TOKEN` secret on this repo.
 
 ## In progress
 

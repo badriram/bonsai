@@ -57,19 +57,18 @@ release:
 
 # Homebrew tap publishing.
 #
-# Prereqs (one-time, operator does in GitHub UI):
-#   1. Create an empty public repo:  github.com/badriram/homebrew-tap
-#   2. Create a Personal Access Token with `repo` scope on that tap repo,
-#      add it as a secret `HOMEBREW_TAP_GITHUB_TOKEN` on THIS repo.
+# Reuses the existing badriram/homebrew-tools tap (alongside other formulae
+# like markdown-preview). Prereqs (one-time, operator does in GitHub UI):
+#   - Create a Personal Access Token with `repo` scope on the homebrew-tools
+#     repo and add it as a secret `HOMEBREW_TAP_GITHUB_TOKEN` on THIS repo.
 #
-# On every tag push, goreleaser will commit a new
-# `Formula/bonsai.rb` to the tap repo so `brew install badriram/tap/bonsai`
-# resolves to the latest release.
+# On every tag push, goreleaser commits a new `Formula/bonsai.rb` to the tap
+# so `brew install badriram/tools/bonsai` resolves to the latest release.
 brews:
   - name: bonsai
     repository:
       owner: badriram
-      name: homebrew-tap
+      name: homebrew-tools
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/badriram/bonsai"
     description: "Cheap, opinionated Kubernetes provisioner for small teams (AWS, Hetzner)"

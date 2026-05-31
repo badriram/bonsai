@@ -1,0 +1,80 @@
+version: 2
+
+project_name: bonsai
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: bonsai
+    main: ./cmd/bonsai
+    binary: bonsai
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: bonsai
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README.md
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: badriram
+    name: bonsai
+  draft: false
+  prerelease: auto
+
+# Homebrew tap publishing.
+#
+# Prereqs (one-time, operator does in GitHub UI):
+#   1. Create an empty public repo:  github.com/badriram/homebrew-tap
+#   2. Create a Personal Access Token with `repo` scope on that tap repo,
+#      add it as a secret `HOMEBREW_TAP_GITHUB_TOKEN` on THIS repo.
+#
+# On every tag push, goreleaser will commit a new
+# `Formula/bonsai.rb` to the tap repo so `brew install badriram/tap/bonsai`
+# resolves to the latest release.
+brews:
+  - name: bonsai
+    repository:
+      owner: badriram
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/badriram/bonsai"
+    description: "Cheap, opinionated Kubernetes provisioner for small teams (AWS, Hetzner)"
+    license: "Apache-2.0"
+    install: |
+      bin.install "bonsai"
+    test: |
+      system "#{bin}/bonsai", "--version"

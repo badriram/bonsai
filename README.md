@@ -2,6 +2,28 @@
 
 Self-service infrastructure CLI. One command provisions a k3s cluster on AWS (later Hetzner, DO) with Postgres and KV included, for ~$35/month.
 
+## Install
+
+**Homebrew** (macOS + Linux):
+
+```sh
+brew tap badriram/tap
+brew install bonsai
+# later:
+brew upgrade bonsai
+```
+
+**Direct download** — grab the right tarball from
+[Releases](https://github.com/badriram/bonsai/releases/latest) for your
+OS/arch, extract, drop `bonsai` somewhere in `$PATH`.
+
+**From source** (Go 1.26+):
+
+```sh
+git clone https://github.com/badriram/bonsai.git && cd bonsai
+make build      # ./bonsai is the binary
+```
+
 ## Quick start
 
 ```sh

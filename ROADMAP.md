@@ -36,64 +36,60 @@ interface required exactly **one** change to shared code:
 - `cli.grow --ha-control` flag, plumbed into Provision
 - Control plane still single-instance EIP — Part 2 wires the ASG
 
+### Phase 3 Part 2 — HA control plane ASG + etcd cluster-init (complete, PR #21)
+- `server-ha.sh.tmpl` SSM-lock leader election: ASG launches 3 simultaneously,
+  one wins `put-parameter --no-overwrite` and runs `--cluster-init`; the
+  other two poll the NLB and join with `--server` + token
+- `control_plane_ha.go` 3-node ASG spread across `net.SubnetIDs`, registered
+  to the NLB TG via `TargetGroupARNs`
+- `rotate-control` HA path = ASG `StartInstanceRefresh` (no snapshot
+  needed — etcd quorum carries state); single-node snapshot+restore path preserved
+- Latent bug fixes surfaced by end-to-end testing: IMDSv2 explicit token,
+  etcd peer ports 2379-2380, VPC-CIDR allow for NLB target health checks,
+  NLB TG `preserve_client_ip.enabled=false` to fix in-VPC asymmetric routing,
+  flannel VXLAN as UDP not TCP, IAM instance-profile EC2/ASG propagation wait,
+  helm `settings.Namespace` for charts that omit `metadata.namespace`,
+  Bitnami valkey chart switched to OCI registry (HTTP repo returns 403 now)
+
+### HA + tailnet mode (BYO headscale/tailscale, complete, PR #21)
+- `--tailnet-url` + `--tailnet-key-ssm` + `--tailnet-tag`: nodes install
+  tailscale on boot, join the operator's tailnet, k3s mesh runs over
+  `tailscale0` (`--node-ip`, `--flannel-iface`, `--advertise-address`)
+- OAuth client secret support (`tskey-client-*`): each node mints its own
+  ephemeral tagged key, auto-pruned on instance death — no manual rotation,
+  per-node blast radius. Pre-auth keys (`tskey-auth-*`) still work as
+  fallback.
+- Zero public 6443 surface in tailnet mode; no NLB; no admin-CIDR holes.
+  Validated end-to-end: 3 control + 2 workers on tailnet, kubectl from
+  operator laptop over tailnet, full in-cluster bootstrap healthy.
+
+### Graviton/arm64 default (complete, PR #21)
+`t3.small` → `t4g.small`, AL2023 AMI filter → `arm64`. ~20% per-instance
+cost reduction; all bootstrap charts ship multi-arch.
+
+### Admin-CIDR SG reconcile (complete, PR #22)
+`bonsai grow` now tags admin rules with description `bonsai-admin` and
+revokes any tagged rule whose CIDR no longer matches the current
+`BONSAI_ADMIN_CIDR`. Previously the SG accumulated every IP we'd ever
+used. Empty CIDR (e.g. switched to tailnet mode) revokes all.
+
+### Release pipeline + Homebrew tap (complete)
+- `.goreleaser.yaml` + `.github/workflows/release.yml` — tag-driven
+  releases. Builds for `darwin/{amd64,arm64}` + `linux/{amd64,arm64}`,
+  uploads tarballs + checksums to the GitHub release.
+- Homebrew tap publish: every tag produces a new `Formula/bonsai.rb` in
+  `badriram/homebrew-tap`. Users: `brew tap badriram/tap && brew install bonsai`.
+- One-time operator setup before first release: create empty
+  `github.com/badriram/homebrew-tap` repo + add a PAT (repo scope on the
+  tap) as the `HOMEBREW_TAP_GITHUB_TOKEN` secret on this repo.
+
 ## In progress
 
-Nothing — Part 1 just merged. Resume from "Next up" below.
+Nothing. Pick from "Next up" below.
 
 ## Next up
 
-### 1. Phase 3 Part 2 — HA control plane ASG + etcd cluster-init  **[do first]**
-
-Wires the 3-node embedded-etcd control plane behind the NLB Part 1 set up.
-The biggest open item.
-
-**Design open** (resolve via Banyan thread or in the PR description before coding):
-
-1. **NLB scheme — internet-facing vs internal.** Current Part 1 creates
-   internet-facing. Recommendation: keep internet-facing, gate 6443 via
-   security group + `BONSAI_ADMIN_CIDR`. Internal NLB forces a bastion/VPN
-   for operator `kubectl`, which is friction for the small-team use case.
-
-2. **Cluster-init coordination — SSM-lock vs sequential launch.**
-   - **SSM-lock:** ASG launches all 3 simultaneously. Each runs
-     `aws ssm put-parameter --name /bonsai/.../etcd-init-leader --no-overwrite`.
-     The one that succeeds runs `k3s server --cluster-init`; the others
-     poll `https://<nlb>:6443/healthz` and join with `--server` + token.
-     Simple, idempotent on replacement, ~10s race window.
-   - **Sequential launch:** Bonsai `RunInstances` the first node directly,
-     waits for etcd quorum, then creates the ASG with size 2 to join.
-     Cleaner ordering, more orchestration code, replacement still uses
-     join (which is correct).
-   - **Recommendation:** SSM-lock. The 10s window is harmless; the
-     `--no-overwrite` is genuinely atomic; replacement just works.
-
-3. **HA default vs opt-in for `--env prod`.** Current `--ha-control` is
-   opt-in. Could auto-enable for `--env prod`. Adds ~$60/mo, which
-   matters at the cost tier Bonsai exists for. **Recommendation:** stay
-   opt-in. Cost is the headline; let the operator decide.
-
-**Files this PR will touch:**
-- `internal/provider/aws/userdata/server-ha.sh.tmpl` (new) — SSM-lock init/join
-- `internal/provider/aws/userdata.go` — render the HA server template
-- `internal/provider/aws/control_plane_ha.go` (new) — ASG-based 3-node
-  control plane with TG registration via launch-template `TargetGroupARNs`
-- `internal/provider/aws/provider.go` — Provision branches on `cfg.HAControl`:
-  HA path replaces ensureControlEIP+ensureControlPlane+associateControlEIP
-  with ensureControlPlaneASG (already-attached to TG); workers use NLB DNS
-- `internal/provider/aws/workers.go` — `controlPlaneURL` becomes NLB DNS
-  when HA
-- `internal/provider/aws/rotate_control.go` — HA path = ASG instance refresh
-  (no snapshot needed; etcd quorum carries state); preserve single-node
-  snapshot+restore path
-- `internal/provider/aws/destroy.go` — destroy control ASG (separate from
-  worker ASG)
-
-**Test plan:** Smoke test (`docs/smoke-test.md`) with `--ha-control` flag.
-Verify: 3 control plane nodes show up in `kubectl get nodes`, one
-initialized + two joined, rotate-control replaces them rolling without API
-downtime, destroy cleans up.
-
-### 2. Phase 3 Part 3 — Hetzner HA
+### 1. Phase 3 Part 3 — Hetzner HA  **[do first]**
 
 3 Servers across locations (`nbg1`, `fsn1`, `hel1`) behind a Hetzner Load
 Balancer. Same SSM-lock pattern doesn't apply on Hetzner (no SSM); use a
@@ -103,7 +99,12 @@ imperatively (first server in the loop), waits for etcd, then creates the
 other two. Imperative leader-pick is honest for Hetzner since the provider
 isn't ASG-driven anyway.
 
-### 3. External S3 backups for Hetzner (CNPG PITR)
+Tailnet-BYO mode on Hetzner is much simpler than on AWS — Hetzner already
+has no SSM/IAM ceremony — but the same `--tailnet-url`/`--tailnet-key-ssm`
+flag surface should work (token can live in `FileSecretStore` instead of
+SSM).
+
+### 2. External S3 backups for Hetzner (CNPG PITR)
 
 Hetzner clusters currently run CNPG without `barmanObjectStore` because
 Hetzner has no managed S3. Wire in support for external S3-compatible
@@ -146,9 +147,16 @@ These don't unblock new features but pay back over time.
 - **Status's `k3s_version`.** AWS path returns `"unknown"` because we never
   publish the running version to Parameter Store. Have `server.sh` write
   `k3s --version` to a parameter; Status reads it.
-- **Release pipeline.** GitHub Releases workflow that builds slim binaries
-  for `darwin/{amd64,arm64}` + `linux/{amd64,arm64}` and publishes on tag.
-- **Homebrew tap.** Once releases exist, publish `badriram/tap/bonsai`.
+- **ASG-of-1 with restore-on-boot** for the single-node control plane —
+  wrap today's single-instance control plane in a 1-instance ASG; on
+  instance death, ASG launches a replacement and user-data restores from
+  the latest S3 snapshot before starting k3s. Same code path
+  `rotate-control` already uses. Cuts unplanned RTO from "manual
+  intervention" to ~3-4 min, no extra cost.
+- **External SQL datastore option** — k3s `--datastore-endpoint=postgres://...`
+  to a managed DB (RDS, etc.). Cluster state survives instance death with
+  near-zero RTO. Middle ground between single-node-with-snapshot and full
+  `--ha-control`.
 
 ## How to resume
 

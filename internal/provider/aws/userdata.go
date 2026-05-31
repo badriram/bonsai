@@ -20,11 +20,11 @@ type serverHAVars struct {
 }
 
 type serverTailnetHAVars struct {
-	Name, Env, Region, TailnetURL, TailnetKeySSMPath string
+	Name, Env, Region, TailnetURL, TailnetKeySSMPath, TailnetTag string
 }
 
 type workerTailnetVars struct {
-	Name, Env, Region, TailnetURL, TailnetKeySSMPath string
+	Name, Env, Region, TailnetURL, TailnetKeySSMPath, TailnetTag string
 }
 
 type workerVars struct {

@@ -30,6 +30,7 @@ type controlPlaneHASpec struct {
 	// and skip NLB target group registration.
 	TailnetURL        string
 	TailnetKeySSMPath string
+	TailnetTag        string
 }
 
 func (s controlPlaneHASpec) tailnetMode() bool {
@@ -62,6 +63,7 @@ func (p *Provider) ensureControlPlaneLT(ctx context.Context, spec controlPlaneHA
 		userData, err = renderServerTailnetHAUserData(serverTailnetHAVars{
 			Name: spec.Name, Env: spec.Env, Region: p.awsCfg.Region,
 			TailnetURL: spec.TailnetURL, TailnetKeySSMPath: spec.TailnetKeySSMPath,
+			TailnetTag: spec.TailnetTag,
 		})
 	} else {
 		userData, err = renderServerHAUserData(serverHAVars{

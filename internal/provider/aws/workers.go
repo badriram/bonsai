@@ -29,6 +29,7 @@ type workerOpts struct {
 	ControlPlaneURL   string
 	TailnetURL        string
 	TailnetKeySSMPath string
+	TailnetTag        string
 }
 
 func (o workerOpts) tailnetMode() bool {
@@ -56,6 +57,7 @@ func (p *Provider) ensureLaunchTemplate(ctx context.Context, name, env string, n
 		userData, err = renderWorkerTailnetUserData(workerTailnetVars{
 			Name: name, Env: env, Region: p.awsCfg.Region,
 			TailnetURL: opts.TailnetURL, TailnetKeySSMPath: opts.TailnetKeySSMPath,
+			TailnetTag: opts.TailnetTag,
 		})
 	} else {
 		userData, err = renderWorkerUserData(workerVars{

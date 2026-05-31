@@ -86,6 +86,7 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 			BackupBucket:      backupBucket,
 			TailnetURL:        cfg.TailnetURL,
 			TailnetKeySSMPath: cfg.TailnetKeySSMPath,
+			TailnetTag:        cfg.TailnetTag,
 		}); err != nil {
 			return provider.PlatformOutputs{}, fmt.Errorf("control plane ASG (tailnet): %w", err)
 		}
@@ -93,7 +94,10 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		// kubeconfig stored in SSM already points at it; the human-friendly
 		// CLUSTER_ENDPOINT we surface is best-effort here.
 		controlURL = "tailnet://" + cfg.TailnetURL
-		workerOpt = workerOpts{TailnetURL: cfg.TailnetURL, TailnetKeySSMPath: cfg.TailnetKeySSMPath}
+		workerOpt = workerOpts{
+			TailnetURL: cfg.TailnetURL, TailnetKeySSMPath: cfg.TailnetKeySSMPath,
+			TailnetTag: cfg.TailnetTag,
+		}
 	case cfg.HAControl:
 		nlb, err := p.ensureControlNLB(ctx, cfg.Name, cfg.Env, net)
 		if err != nil {

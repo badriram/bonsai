@@ -11,6 +11,7 @@ ENV="{{.Env}}"
 REGION="{{.Region}}"
 TAILNET_URL="{{.TailnetURL}}"
 TAILNET_KEY_SSM="{{.TailnetKeySSMPath}}"
+TAILNET_TAG="{{.TailnetTag}}"
 
 LEADER_KEY="/bonsai/${NAME}/${ENV}/etcd-init-leader"
 TOKEN_KEY="/bonsai/${NAME}/${ENV}/token"
@@ -31,13 +32,28 @@ INSTANCE_ID="$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
 
 # Install tailscale and join the operator's tailnet.
 curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
-TAILNET_AUTHKEY="$(aws ssm get-parameter --region "$REGION" \
+TAILNET_CRED="$(aws ssm get-parameter --region "$REGION" \
   --name "$TAILNET_KEY_SSM" --with-decryption \
   --query Parameter.Value --output text)"
+# OAuth client secrets (tskey-client-*) tell the tailscale CLI to mint a
+# per-node key on demand. We append URL params to make those minted keys
+# ephemeral + preauthorized; for pre-auth keys (tskey-auth-*) the params
+# are ignored and the key's baked-in properties apply.
+case "$TAILNET_CRED" in
+  tskey-client-*)
+    TAILNET_AUTHKEY="${TAILNET_CRED}?ephemeral=true&preauthorized=true"
+    TAILNET_TAG_FLAGS="--advertise-tags=${TAILNET_TAG}"
+    ;;
+  *)
+    TAILNET_AUTHKEY="$TAILNET_CRED"
+    TAILNET_TAG_FLAGS=""
+    ;;
+esac
 tailscale up \
   --authkey="$TAILNET_AUTHKEY" \
   --login-server="$TAILNET_URL" \
   --hostname="bonsai-${NAME}-${ENV}-${INSTANCE_ID}" \
+  $TAILNET_TAG_FLAGS \
   --accept-routes
 # Tailscaled allocates the tailnet IP synchronously by the time `up` returns.
 TAILNET_IP="$(tailscale ip -4)"

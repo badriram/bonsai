@@ -8,6 +8,7 @@ ENV="{{.Env}}"
 REGION="{{.Region}}"
 TAILNET_URL="{{.TailnetURL}}"
 TAILNET_KEY_SSM="{{.TailnetKeySSMPath}}"
+TAILNET_TAG="{{.TailnetTag}}"
 
 command -v aws >/dev/null 2>&1 || {
   if command -v dnf >/dev/null; then dnf install -y awscli >/dev/null
@@ -21,13 +22,24 @@ INSTANCE_ID="$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
   http://169.254.169.254/latest/meta-data/instance-id)"
 
 curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
-TAILNET_AUTHKEY="$(aws ssm get-parameter --region "$REGION" \
+TAILNET_CRED="$(aws ssm get-parameter --region "$REGION" \
   --name "$TAILNET_KEY_SSM" --with-decryption \
   --query Parameter.Value --output text)"
+case "$TAILNET_CRED" in
+  tskey-client-*)
+    TAILNET_AUTHKEY="${TAILNET_CRED}?ephemeral=true&preauthorized=true"
+    TAILNET_TAG_FLAGS="--advertise-tags=${TAILNET_TAG}"
+    ;;
+  *)
+    TAILNET_AUTHKEY="$TAILNET_CRED"
+    TAILNET_TAG_FLAGS=""
+    ;;
+esac
 tailscale up \
   --authkey="$TAILNET_AUTHKEY" \
   --login-server="$TAILNET_URL" \
   --hostname="bonsai-${NAME}-${ENV}-worker-${INSTANCE_ID}" \
+  $TAILNET_TAG_FLAGS \
   --accept-routes
 TAILNET_IP="$(tailscale ip -4)"
 

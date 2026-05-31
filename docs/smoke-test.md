@@ -280,11 +280,21 @@ NLB and admin-CIDR machinery entirely.
 ### Prerequisites
 
 - A headscale instance OR Tailscale Cloud account.
-- A pre-auth key stored in SSM under a path you control. Example:
+- A device tag defined in your tailnet ACL (e.g. `tag:bonsai`) — operators
+  pre-approved to use it.
+- **Recommended:** an OAuth client scoped to `auth_keys:write` with tag
+  `tag:bonsai`. Stored as SecureString:
   ```sh
+  # in Tailscale admin: Settings → OAuth clients → Generate OAuth client
+  # capability: Devices > Keys > Write, tags: tag:bonsai
   aws ssm put-parameter --name /myorg/secrets/tailnet-key \
-    --type SecureString --value 'tskey-auth-...'
+    --type SecureString --value 'tskey-client-...'
   ```
+  Each node mints its own one-shot ephemeral key on boot and is auto-pruned
+  from the tailnet when the instance dies. No key rotation needed.
+
+  **Or** a reusable pre-auth key (`tskey-auth-...`) — works the same in user-data
+  but you'll need to rotate every 90 days and prune dead nodes manually.
 
 ### T1. `grow --ha-control` with tailnet flags
 
@@ -292,7 +302,8 @@ NLB and admin-CIDR machinery entirely.
 bonsai grow --provider aws --name $NAME --env $ENV --workers 2 \
   --ha-control \
   --tailnet-url=https://headscale.example.com \
-  --tailnet-key-ssm=/myorg/secrets/tailnet-key
+  --tailnet-key-ssm=/myorg/secrets/tailnet-key \
+  --tailnet-tag=tag:bonsai
 ```
 
 **What's different from H1:**
@@ -322,10 +333,14 @@ control plane entries + 2 worker entries.
 ### T4. Destroy
 
 `bonsai destroy --advanced` works the same — terminates the ASG and ALL
-the rest. Note: instances die without `tailscale logout`, so ghost
-machines will linger in headscale until you prune them
-(`headscale nodes expire $node_id`). Bonsai doesn't manage tailnet
-membership lifecycle in v1.
+the rest.
+
+- **With OAuth client + ephemeral keys** (recommended): nodes go offline
+  on terminate; Tailscale auto-removes them from the tailnet ~5 min later.
+  Nothing to clean up.
+- **With pre-auth keys**: instances die without `tailscale logout`, so
+  ghost machines will linger in headscale until you prune them
+  (`headscale nodes expire $node_id`).
 
 ## Phase 3: teardown
 

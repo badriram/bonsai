@@ -26,11 +26,16 @@ runcmd:
       --accept-routes
     TAILNET_IP="$(tailscale ip -4)"
 
-    curl -sfL https://get.k3s.io | \
-      INSTALL_K3S_VERSION="{{.K3sVersion}}" \
-      K3S_URL="https://{{.ControlTailnetIP}}:6443" \
-      K3S_TOKEN="{{.Token}}" \
-      INSTALL_K3S_EXEC="agent --node-ip=${TAILNET_IP} --flannel-iface=tailscale0" \
-      sh -
+    for attempt in 1 2 3 4 5; do
+      curl -sfL https://get.k3s.io | \
+        INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+        K3S_URL="https://{{.ControlTailnetIP}}:6443" \
+        K3S_TOKEN="{{.Token}}" \
+        INSTALL_K3S_EXEC="agent --node-ip=${TAILNET_IP} --flannel-iface=tailscale0" \
+        sh - && break
+      echo "bonsai: k3s install attempt $attempt failed; retrying in $((attempt*5))s" >&2
+      sleep $((attempt * 5))
+    done
+    systemctl is-active k3s-agent >/dev/null || { echo "bonsai: k3s-agent never became active" >&2; exit 1; }
 
     touch /var/lib/bonsai-worker-ready

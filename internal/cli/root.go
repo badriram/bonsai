@@ -9,7 +9,7 @@ func NewRootCommand() *cobra.Command {
 		Long: `Bonsai is a self-service infrastructure CLI. One command provisions
 a production k3s cluster with Postgres and KV included.
 
-Developer verbs: grow, status, logs.
+Developer verbs: grow, plan, status, logs.
 Operator verbs (--advanced): bake-image, rotate-workers, rotate-control,
 upgrade, destroy.`,
 	}
@@ -17,6 +17,7 @@ upgrade, destroy.`,
 
 	root.AddCommand(
 		newGrowCommand(),
+		newPlanCommand(),
 		newStatusCommand(),
 		newLogsCommand(),
 	)

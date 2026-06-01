@@ -9,6 +9,7 @@ import (
 	"github.com/badriram/bonsai/internal/provider"
 	awsprov "github.com/badriram/bonsai/internal/provider/aws"
 	hetznerprov "github.com/badriram/bonsai/internal/provider/hetzner"
+	libvirtprov "github.com/badriram/bonsai/internal/provider/libvirt"
 	"github.com/spf13/cobra"
 )
 
@@ -127,7 +128,9 @@ func selectProvider(ctx context.Context, name string) (provider.PlatformProvider
 		return awsprov.New(ctx)
 	case "hetzner":
 		return hetznerprov.New(ctx)
+	case "libvirt":
+		return libvirtprov.New(ctx)
 	default:
-		return nil, fmt.Errorf("unknown provider %q (valid: aws, hetzner)", name)
+		return nil, fmt.Errorf("unknown provider %q (valid: aws, hetzner, libvirt)", name)
 	}
 }

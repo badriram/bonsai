@@ -18,9 +18,33 @@ import (
 //   - tailnet (--tailnet-key-file set): no LB, cluster API on tailnet IPs
 //   - LB     (default with --ha-control):     Hetzner Load Balancer fronts 6443
 func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (provider.PlatformOutputs, error) {
-	locations := haLocations() // nbg1, fsn1, hel1
-	progress.Step("hetzner HA grow: cluster=%s env=%s locations=%v workers=%d tailnet=%v",
-		cfg.Name, cfg.Env, locations, cfg.Workers, cfg.TailnetMode())
+	locations := cfg.Locations
+	if len(locations) == 0 {
+		locations = haLocations() // nbg1, fsn1, hel1
+	}
+	if len(locations) < 3 {
+		return provider.PlatformOutputs{}, fmt.Errorf("ha control plane needs >=3 locations, got %v", locations)
+	}
+	k3sVersion := cfg.K3sVersion
+	if k3sVersion == "" {
+		k3sVersion = defaultK3sVersion
+	}
+	controlType := cfg.ControlServerType
+	if controlType == "" {
+		controlType = defaultServerType
+	}
+	workerType := cfg.WorkerServerType
+	if workerType == "" {
+		workerType = defaultServerType
+	}
+	progress.Step("hetzner HA grow: cluster=%s env=%s locations=%v workers=%d tailnet=%v control_type=%s worker_type=%s k3s=%s",
+		cfg.Name, cfg.Env, locations, cfg.Workers, cfg.TailnetMode(), controlType, workerType, k3sVersion)
+	// AdminCIDR resolution: config field beats env var. Set env so the
+	// firewall helper (which reads BONSAI_ADMIN_CIDR today) picks it up
+	// without each call site needing to know about cfg.
+	if cfg.AdminCIDR != "" {
+		_ = os.Setenv("BONSAI_ADMIN_CIDR", cfg.AdminCIDR)
+	}
 
 	progress.Step("ensuring SSH + host keys")
 	sshKey, err := p.ensureSSHKey(ctx, cfg.Name, cfg.Env)
@@ -82,7 +106,8 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 		Firewall:               fw,
 		LB:                     lbInfra,
 		SSHKey:                 sshKey,
-		K3sVersion:             defaultK3sVersion,
+		K3sVersion:             k3sVersion,
+		ControlServerType:      controlType,
 		TailnetURL:             cfg.TailnetURL,
 		TailnetAuthCred:        tailnetCred,
 		TailnetTag:             cfg.TailnetTag,
@@ -231,7 +256,7 @@ func (p *Provider) ensureWorkersHA(
 		var userData string
 		if tailnetMode {
 			userData, err = renderWorkerTailnetUserData(workerTailnetVars{
-				Name: name, Env: env, K3sVersion: defaultK3sVersion,
+				Name: name, Env: env, K3sVersion: k3sVersionOrDefault(cfg.K3sVersion),
 				Token:            token,
 				NodeIndex:        i + 1,
 				ControlTailnetIP: joinIP,
@@ -241,15 +266,19 @@ func (p *Provider) ensureWorkersHA(
 			})
 		} else {
 			userData, err = renderWorkerUserData(workerVars{
-				ControlIP: joinIP, K3sVersion: defaultK3sVersion, Token: token,
+				ControlIP: joinIP, K3sVersion: k3sVersionOrDefault(cfg.K3sVersion), Token: token,
 			})
 		}
 		if err != nil {
 			return err
 		}
+		workerType := cfg.WorkerServerType
+		if workerType == "" {
+			workerType = defaultServerType
+		}
 		res, _, err := p.client.Server.Create(ctx, hcloud.ServerCreateOpts{
 			Name:       fmt.Sprintf("bonsai-%s-%s-worker-%d", name, env, i+1),
-			ServerType: &hcloud.ServerType{Name: defaultServerType},
+			ServerType: &hcloud.ServerType{Name: workerType},
 			Image:      image,
 			Location:   &hcloud.Location{Name: locations[i%len(locations)]},
 			SSHKeys:    []*hcloud.SSHKey{sshKey},

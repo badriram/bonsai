@@ -54,6 +54,9 @@ func New(ctx context.Context) (*Provider, error) {
 // Provision is idempotent: every step looks up by tag, creates if missing,
 // updates if drifted. Safe to run from CI on every deploy.
 func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provider.PlatformOutputs, error) {
+	if cfg.AdminCIDR != "" {
+		_ = os.Setenv("BONSAI_ADMIN_CIDR", cfg.AdminCIDR)
+	}
 	net, err := p.ensureVPC(ctx, cfg.Name, cfg.Env, cfg.HAControl)
 	if err != nil {
 		return provider.PlatformOutputs{}, err

@@ -36,8 +36,9 @@ type haControlSpec struct {
 	Network    *hcloud.Network  // private network for the cluster
 	Firewall   *hcloud.Firewall // applied to all control plane servers
 	LB         *lbInfra         // nil in tailnet mode
-	SSHKey     *hcloud.SSHKey
-	K3sVersion string
+	SSHKey            *hcloud.SSHKey
+	K3sVersion        string
+	ControlServerType string // empty → defaultServerType
 
 	// Tailnet config — empty in LB mode.
 	TailnetURL      string
@@ -183,9 +184,13 @@ func (p *Provider) createHAServer(ctx context.Context, spec haControlSpec, index
 		return nil, err
 	}
 
+	serverType := spec.ControlServerType
+	if serverType == "" {
+		serverType = defaultServerType
+	}
 	res, _, err := p.client.Server.Create(ctx, hcloud.ServerCreateOpts{
 		Name:       fmt.Sprintf("bonsai-%s-%s-control-%d", spec.Name, spec.Env, index),
-		ServerType: &hcloud.ServerType{Name: defaultServerType},
+		ServerType: &hcloud.ServerType{Name: serverType},
 		Image:      spec.Image,
 		Location:   &hcloud.Location{Name: location},
 		SSHKeys:    []*hcloud.SSHKey{spec.SSHKey},

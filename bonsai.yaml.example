@@ -1,0 +1,61 @@
+# Bonsai per-cluster config. Commit this next to your app. Operator-edited.
+#
+# Usage:
+#   bonsai grow                     # auto-discovers ./bonsai.yaml
+#   bonsai grow --config path/to/bonsai.yaml
+#
+# CLI flags override individual fields (e.g. --workers 5 to scale on demand).
+
+name: my-app
+env: prod
+provider: hetzner          # aws | hetzner
+
+# Worker count. Use --workers N on the CLI for one-shot scaling.
+workers: 2
+
+# 3-node embedded-etcd control plane behind a load balancer (or tailnet, below).
+# Adds ~$60/mo of infra (AWS NLB) or ~€5/mo (Hetzner lb11). Opt-in.
+ha_control: true
+
+# Operator source CIDR for SSH + 6443 post-firewall. REQUIRED unless tailnet.enabled.
+# Tip: `curl -s -4 https://api.ipify.org`/32
+admin_cidr: 198.51.100.42/32
+
+# Provider-specific SKUs. Empty → bonsai's default (cpx22 on Hetzner, t4g.small on AWS).
+# Hetzner options: cpx22 (x86, default), cax21 (arm, bigger), ccx13 (more memory).
+control_server_type: cpx22
+worker_server_type: cpx22
+
+# Hetzner: HA spread locations (>=3 required for ha_control). Default nbg1/fsn1/hel1.
+# AWS: ignored — provider picks AZs from region.
+locations:
+  - nbg1
+  - fsn1
+  - hel1
+
+# Optional: pin k3s release per cluster. Empty → bonsai's compiled default.
+# Bump per cluster to test newer k3s ahead of a global default bump.
+k3s_version: v1.31.0+k3s1
+
+# CNPG postgres replica count. 1 for dev/staging (halves cost), 2 default,
+# 3 for production HA with synchronous replication.
+postgres:
+  instances: 2
+
+# Tailnet-BYO mode: zero public 6443 surface; only members of your tailnet
+# can reach the API. Operator must be on the same tailnet.
+#
+# Comment out the whole block for LB mode (default).
+tailnet:
+  enabled: false
+  login_server: https://controlplane.tailscale.com    # or your headscale URL
+  tag: tag:bonsai                                      # must exist in tailnet ACL
+
+  # EXACTLY ONE of:
+  # auth_key_file: ~/.bonsai/_secrets/tailnet-key      # Hetzner: local file path
+  # auth_key_ssm: /myorg/bonsai/tailnet-key            # AWS: SSM parameter path
+  #
+  # Both accept either tskey-client-* (OAuth client secret, recommended —
+  # bonsai mints per-node ephemeral keys) or tskey-auth-* (reusable pre-auth).
+  # The file is scanned for the first tskey-* token, so a multi-line paste
+  # from the Tailscale admin UI works.

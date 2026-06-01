@@ -15,6 +15,14 @@ import (
 	"github.com/badriram/bonsai/internal/secrets"
 )
 
+// k3sVersionOrDefault returns v if non-empty, else the pinned default.
+func k3sVersionOrDefault(v string) string {
+	if v != "" {
+		return v
+	}
+	return defaultK3sVersion
+}
+
 // Hetzner pinning. Bumps are intentional commits.
 const (
 	defaultK3sVersion       = "v1.31.0+k3s1"
@@ -75,8 +83,13 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	}
 
 	location := defaultLocation
-	if cfg.Region != "" {
+	if len(cfg.Locations) > 0 {
+		location = cfg.Locations[0]
+	} else if cfg.Region != "" {
 		location = cfg.Region // Hetzner exposes "regions" as location codes (nbg1, fsn1, hel1, ash, hil)
+	}
+	if cfg.AdminCIDR != "" {
+		_ = os.Setenv("BONSAI_ADMIN_CIDR", cfg.AdminCIDR)
 	}
 
 	sshKey, err := p.ensureSSHKey(ctx, cfg.Name, cfg.Env)
@@ -90,7 +103,7 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	}
 
 	controlIP := fip.IP.String()
-	control, err := p.ensureControlPlane(ctx, cfg.Name, cfg.Env, location, sshKey, controlIP)
+	control, err := p.ensureControlPlane(ctx, cfg, location, sshKey, controlIP)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("control plane: %w", err)
 	}
@@ -120,7 +133,7 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	if workerCount < 1 {
 		workerCount = 1
 	}
-	if err := p.ensureWorkers(ctx, cfg.Name, cfg.Env, location, sshKey, controlIP, token, workerCount); err != nil {
+	if err := p.ensureWorkers(ctx, cfg, location, sshKey, controlIP, token, workerCount); err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("workers: %w", err)
 	}
 

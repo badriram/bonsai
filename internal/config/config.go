@@ -1,12 +1,40 @@
 package config
 
 // ClusterConfig is the input every provider receives. Same shape on every cloud.
+// Populated from bonsai.yaml (preferred) or CLI flags + env vars (legacy).
 type ClusterConfig struct {
 	Provider string
 	Name     string
 	Env      string
 	Region   string
 	Workers  int
+
+	// ControlServerType / WorkerServerType let operators pick provider-specific
+	// SKUs (Hetzner: cax21 for bigger arm, ccx13 for more memory; AWS: t4g.medium
+	// for headroom). Empty string means "use the provider's compiled-in default"
+	// — cpx22 on Hetzner today, t4g.small on AWS. Control and worker are
+	// distinct so a team can size up workers without paying for bigger control
+	// nodes (or vice versa).
+	ControlServerType string
+	WorkerServerType  string
+
+	// Locations is the placement list. For Hetzner HA control plane: the 3
+	// locations to spread across (default nbg1/fsn1/hel1). For Hetzner single
+	// node: the first entry, otherwise Region falls back to defaultLocation.
+	// For AWS: ignored today (provider picks AZs from the region). Empty
+	// means "provider default".
+	Locations []string
+
+	// K3sVersion overrides the compiled-in pinned k3s release. Format matches
+	// k3s github tags: "v1.31.0+k3s1". Empty means "use bonsai's pinned
+	// default" — bump this per cluster to test newer releases ahead of a
+	// global default bump.
+	K3sVersion string
+
+	// PostgresInstances is the CNPG cluster replica count. Default 2 (1 primary
+	// + 1 standby). Set to 1 for dev/staging to halve postgres cost, 3 for
+	// production with synchronous replication and HA failover.
+	PostgresInstances int
 
 	// HAControl, when true, provisions a 3-node embedded-etcd control plane
 	// across multiple AZs behind a load balancer instead of a single EC2 with
@@ -43,6 +71,12 @@ type ClusterConfig struct {
 	// cloud-init user-data; rotation is the operator's job. Exactly one of
 	// TailnetKeySSMPath / TailnetKeyFile should be set.
 	TailnetKeyFile string
+
+	// AdminCIDR is the operator's source CIDR that the cluster firewall lets
+	// through to 22 (SSH) and 6443 (k8s API). Required UNLESS TailnetMode is
+	// true. Falls back to BONSAI_ADMIN_CIDR env var when empty so the env-var
+	// workflow keeps working alongside the config-file workflow.
+	AdminCIDR string
 }
 
 // TailnetMode returns true when the cluster should join an operator-owned

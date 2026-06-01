@@ -13,6 +13,7 @@ import (
 	bcfg "github.com/badriram/bonsai/internal/config"
 	"github.com/badriram/bonsai/internal/provider"
 	"github.com/badriram/bonsai/internal/secrets"
+	"github.com/badriram/bonsai/internal/state"
 )
 
 // k3sVersionOrDefault returns v if non-empty, else the pinned default.
@@ -46,8 +47,9 @@ const (
 //     Parameter Store equivalent; Object Storage is beta-tier and not worth
 //     the dependency for Phase 2.
 type Provider struct {
-	client *hcloud.Client
-	store  secrets.Store
+	client  *hcloud.Client
+	store   secrets.Store
+	dataDir string // BONSAI_DATA_DIR root; state.json lives at dataDir/<name>-<env>/state.json
 }
 
 func New(ctx context.Context) (*Provider, error) {
@@ -64,8 +66,9 @@ func New(ctx context.Context) (*Provider, error) {
 		dataDir = filepath.Join(home, ".bonsai")
 	}
 	return &Provider{
-		client: hcloud.NewClient(hcloud.WithToken(token)),
-		store:  secrets.NewFile(dataDir),
+		client:  hcloud.NewClient(hcloud.WithToken(token)),
+		store:   secrets.NewFile(dataDir),
+		dataDir: dataDir,
 	}, nil
 }
 
@@ -152,12 +155,58 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, postgresURLKey), out.PostgresURL)
 	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, kvURLKey), out.KVURL)
 
+	if err := p.writeStateSingle(ctx, cfg, controlIP, fip); err != nil {
+		// Non-fatal — see writeStateHA comment.
+		fmt.Fprintf(os.Stderr, "warning: state.json write failed: %v\n", err)
+	}
+
 	return provider.PlatformOutputs{
 		ClusterEndpoint:    "https://" + controlIP + ":6443",
 		KubeconfigLocation: "file://" + secretKey(cfg.Name, cfg.Env, kubeconfigSecretKey),
 		PostgresURL:        out.PostgresURL,
 		KVURL:              out.KVURL,
 	}, nil
+}
+
+// writeStateSingle snapshots the single-node Hetzner cluster's state.
+// Re-queries servers by label rather than threading IDs through every
+// helper. Same non-fatal posture as the HA path.
+func (p *Provider) writeStateSingle(ctx context.Context, cfg bcfg.ClusterConfig, controlIP string, fip *hcloud.FloatingIP) error {
+	servers, err := p.client.Server.AllWithOpts(ctx, hcloud.ServerListOpts{
+		ListOpts: hcloud.ListOpts{LabelSelector: clusterSelector(cfg.Name, cfg.Env)},
+	})
+	if err != nil {
+		return err
+	}
+	hs := &state.HetznerState{
+		FloatingIPID: fip.ID,
+		K3sVersion:   k3sVersionOrDefault(cfg.K3sVersion),
+	}
+	for _, s := range servers {
+		role := "worker"
+		if r, ok := s.Labels["bonsai.role"]; ok {
+			role = r
+		}
+		hs.Servers = append(hs.Servers, state.HetznerServer{
+			ID:         s.ID,
+			Name:       s.Name,
+			Role:       role,
+			Location:   s.Datacenter.Location.Name,
+			ServerType: s.ServerType.Name,
+			PublicIP:   firstPublicIP(s),
+			PrivateIP:  firstPrivateIP(s),
+		})
+	}
+	st := &state.State{
+		BonsaiVersion:   versionInfo(),
+		Declared:        cfg,
+		ClusterEndpoint: "https://" + controlIP + ":6443",
+		Hetzner:         hs,
+	}
+	if existing, _ := state.Read(state.Path(p.dataDir, cfg.Name, cfg.Env)); existing != nil {
+		st.ProvisionedAt = existing.ProvisionedAt
+	}
+	return state.Write(state.Path(p.dataDir, cfg.Name, cfg.Env), st)
 }
 
 // retrieveControlState SSHs to the control plane after server.sh finishes and

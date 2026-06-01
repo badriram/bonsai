@@ -12,6 +12,7 @@ import (
 	bcfg "github.com/badriram/bonsai/internal/config"
 	"github.com/badriram/bonsai/internal/progress"
 	"github.com/badriram/bonsai/internal/provider"
+	"github.com/badriram/bonsai/internal/state"
 )
 
 // provisionHA handles the --ha-control path on Hetzner. Two sub-modes:
@@ -173,6 +174,13 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, postgresURLKey), out.PostgresURL)
 	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, kvURLKey), out.KVURL)
 
+	if err := p.writeStateHA(ctx, cfg, clusterEndpoint, leaderReachableIP, tailnetMode, network, fw, lbInfra, sshKey, image, k3sVersion); err != nil {
+		// Non-fatal: cluster is up, kubeconfig written. State is a perf
+		// optimization for status/destroy; we surface the error but don't
+		// fail the grow.
+		progress.Step("warning: state.json write failed: %v", err)
+	}
+
 	return provider.PlatformOutputs{
 		ClusterEndpoint:    "https://" + clusterEndpoint + ":6443",
 		KubeconfigLocation: "file://" + secretKey(cfg.Name, cfg.Env, kubeconfigSecretKey),
@@ -180,6 +188,69 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 		KVURL:              out.KVURL,
 	}, nil
 }
+
+// writeStateHA snapshots all the IDs Bonsai created on Hetzner for this
+// cluster into state.json. Re-queries servers by label rather than
+// threading them through every helper — the API call is cheap and gives
+// us the post-creation IPs (private + public + tailnet) in one shot.
+func (p *Provider) writeStateHA(ctx context.Context, cfg bcfg.ClusterConfig, clusterEndpoint, leaderTailnetIP string, tailnetMode bool, network *hcloud.Network, fw *hcloud.Firewall, lbInfra *lbInfra, sshKey *hcloud.SSHKey, image *hcloud.Image, k3sVersion string) error {
+	servers, err := p.client.Server.AllWithOpts(ctx, hcloud.ServerListOpts{
+		ListOpts: hcloud.ListOpts{LabelSelector: clusterSelector(cfg.Name, cfg.Env)},
+	})
+	if err != nil {
+		return err
+	}
+	hs := &state.HetznerState{
+		NetworkID:  network.ID,
+		FirewallID: fw.ID,
+		SSHKeyID:   sshKey.ID,
+		K3sVersion: k3sVersion,
+	}
+	if image != nil {
+		hs.ImageName = image.Name
+	}
+	if lbInfra != nil {
+		hs.LBID = lbInfra.LB.ID
+		hs.LBPublicIP = lbInfra.PublicIP
+		hs.LBPrivateIP = lbInfra.PrivateIP
+	}
+	if tailnetMode {
+		hs.LeaderTailnetIP = leaderTailnetIP
+	}
+	for _, s := range servers {
+		role := "worker"
+		if r, ok := s.Labels["bonsai.role"]; ok {
+			role = r
+		}
+		entry := state.HetznerServer{
+			ID:         s.ID,
+			Name:       s.Name,
+			Role:       role,
+			Location:   s.Datacenter.Location.Name,
+			ServerType: s.ServerType.Name,
+			PublicIP:   firstPublicIP(s),
+			PrivateIP:  firstPrivateIP(s),
+		}
+		hs.Servers = append(hs.Servers, entry)
+	}
+
+	st := &state.State{
+		BonsaiVersion:   versionInfo(),
+		Declared:        cfg,
+		ClusterEndpoint: "https://" + clusterEndpoint + ":6443",
+		Hetzner:         hs,
+	}
+	// Preserve ProvisionedAt across re-grows.
+	if existing, _ := state.Read(state.Path(p.dataDir, cfg.Name, cfg.Env)); existing != nil {
+		st.ProvisionedAt = existing.ProvisionedAt
+	}
+	return state.Write(state.Path(p.dataDir, cfg.Name, cfg.Env), st)
+}
+
+// versionInfo is a stub for `bonsai --version`. CLI sets it via ldflags at
+// build time and exposes it through a package-level var; for now we keep
+// the value local to avoid a wider refactor.
+func versionInfo() string { return "v0.2.1+state" }
 
 // readTailnetCred reads the tailnet credential from disk. Bonsai loads it
 // once at grow time and bakes it into cloud-init — the operator's file is

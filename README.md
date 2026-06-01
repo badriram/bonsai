@@ -173,7 +173,7 @@ Everything else is autonomous or operator-driven.
 
 ## Status
 
-Current release: **v0.2.0** — Hetzner HA validated end-to-end on real Hetzner (3 control + 2 workers + LB, CNPG postgres healthy).
+Current release: **v0.2.1** — both Hetzner HA modes (LB-fronted and tailnet-BYO) validated end-to-end on real Hetzner. Tailnet mode brings up a 3-control + 2-worker cluster with zero public 6443 surface in ~5 minutes.
 
 | Phase | State |
 |---|---|

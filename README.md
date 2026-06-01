@@ -42,6 +42,43 @@ export BONSAI_DATA_DIR=~/Sync/bonsai                  # team-shared via end-to-e
 
 For most single-operator setups, full-disk encryption + the default path is fine.
 
+## Per-cluster config — `bonsai.yaml`
+
+Commit a `bonsai.yaml` next to your app to lock the operator intent in source
+control. `bonsai grow` auto-discovers `./bonsai.yaml` (or pass `--config <path>`).
+CLI flags still work and override individual fields for one-shot operations
+(e.g. `bonsai grow --workers 5` to scale).
+
+```yaml
+name: my-app
+env: prod
+provider: hetzner
+workers: 2
+ha_control: true
+admin_cidr: 198.51.100.42/32      # required unless tailnet.enabled
+control_server_type: cpx22
+worker_server_type: cpx22
+locations: [nbg1, fsn1, hel1]
+k3s_version: v1.31.0+k3s1
+postgres:
+  instances: 2
+tailnet:
+  enabled: true
+  login_server: https://controlplane.tailscale.com
+  tag: tag:bonsai
+  auth_key_file: ~/.bonsai/_secrets/tailnet-key   # Hetzner
+  # auth_key_ssm: /myorg/bonsai/tailnet-key       # AWS instead
+```
+
+Validation happens at load time — malformed credential files, missing
+`admin_cidr`, typoed field names all fail before any cloud API call.
+See [`bonsai.yaml.example`](bonsai.yaml.example) for a fully-documented template.
+
+What's NOT in `bonsai.yaml`:
+
+- **Secrets** (tokens, keys, kubeconfig) — live in `BONSAI_DATA_DIR/<name>-<env>/`
+- **Inline `auth_key:`** — always use `auth_key_file` or `auth_key_ssm`, never paste a `tskey-*` into a committable file
+
 ## Quick start
 
 ### AWS (single-node, simplest)

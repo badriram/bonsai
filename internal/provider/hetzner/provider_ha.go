@@ -103,9 +103,15 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 		workerJoinIP = leaderReachableIP
 	}
 
-	// Pull kubeconfig from the leader. Rewrite the embedded server URL to
-	// whatever clients should use (LB public IP, or leader tailnet IP).
-	kubeconfig, err := p.fetchKubeconfig(ctx, cfg.Name, cfg.Env, leader)
+	// Pull kubeconfig from the leader. SSH IP depends on mode: in LB mode
+	// the firewall opens admin_cidr → public 22; in tailnet mode public 22
+	// is closed and we route via the leader's tailnet IP (operator must be
+	// on the tailnet, which they are by definition — they hold the cred).
+	sshIP := firstPublicIP(leader)
+	if tailnetMode {
+		sshIP = leaderReachableIP
+	}
+	kubeconfig, err := p.fetchKubeconfig(ctx, cfg.Name, cfg.Env, sshIP)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("fetch kubeconfig: %w", err)
 	}
@@ -162,14 +168,28 @@ func (p *Provider) readTailnetCred(cfg bcfg.ClusterConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(b)), nil
+	// Accept either a bare token or the Tailscale admin UI's two-line
+	// "Client ID: ...\nClient secret: tskey-..." copy-paste. Scan tokens
+	// for the first one matching tskey-{client,auth}-* and use it.
+	// An embedded newline would otherwise break the rendered shell var
+	// AND the cloud-init YAML block scalar that wraps it.
+	for _, tok := range strings.Fields(string(b)) {
+		if strings.HasPrefix(tok, "tskey-client-") || strings.HasPrefix(tok, "tskey-auth-") {
+			return tok, nil
+		}
+	}
+	return "", fmt.Errorf("no tskey-client-* or tskey-auth-* token found in %s", cfg.TailnetKeyFile)
 }
 
 // fetchKubeconfig SSHes the leader and reads /etc/rancher/k3s/k3s.yaml.
 // Token comes from ensureHAToken (pre-seeded into FileSecretStore before
 // the leader boots).
-func (p *Provider) fetchKubeconfig(ctx context.Context, name, env string, leader *hcloud.Server) (string, error) {
-	client, err := p.sshClient(ctx, name, env, firstPublicIP(leader))
+//
+// sshIP is whichever address Bonsai can still reach after the cluster
+// firewall is applied: the public IP (LB mode, with admin_cidr open) or
+// the leader's tailnet IP (tailnet mode, where public 22 is closed).
+func (p *Provider) fetchKubeconfig(ctx context.Context, name, env, sshIP string) (string, error) {
+	client, err := p.sshClient(ctx, name, env, sshIP)
 	if err != nil {
 		return "", err
 	}

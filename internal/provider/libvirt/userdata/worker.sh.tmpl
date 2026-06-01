@@ -1,0 +1,26 @@
+#!/bin/sh
+# Bonsai libvirt worker first-boot.
+set -eu
+
+PRIV_IP="$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1)"
+if [ -z "$PRIV_IP" ]; then
+  echo "bonsai: no IPv4 address found on any global-scope interface" >&2
+  exit 1
+fi
+
+apk add --no-cache curl openssh
+
+for attempt in 1 2 3 4 5; do
+  curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+    INSTALL_K3S_EXEC="agent --node-ip=$PRIV_IP" \
+    K3S_URL="https://{{.ControlIP}}:6443" \
+    K3S_TOKEN="{{.Token}}" \
+    sh - && break
+  echo "bonsai: k3s install attempt $attempt failed; retrying in $((attempt*5))s" >&2
+  sleep $((attempt * 5))
+done
+rc-service k3s-agent status >/dev/null 2>&1 || rc-service k3s-agent start
+rc-update add k3s-agent default
+
+touch /var/lib/bonsai-worker-ready

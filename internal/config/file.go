@@ -90,8 +90,10 @@ func Validate(cc ClusterConfig) error {
 	if cc.Name == "" {
 		return fmt.Errorf("name: required")
 	}
-	if cc.Provider != "aws" && cc.Provider != "hetzner" {
-		return fmt.Errorf("provider: must be aws | hetzner (got %q)", cc.Provider)
+	switch cc.Provider {
+	case "aws", "hetzner", "libvirt":
+	default:
+		return fmt.Errorf("provider: must be aws | hetzner | libvirt (got %q)", cc.Provider)
 	}
 
 	// Without tailnet, the operator's source CIDR is the only thing that
@@ -117,11 +119,15 @@ func Validate(cc ClusterConfig) error {
 		if cc.TailnetKeyFile != "" && cc.TailnetKeySSMPath != "" {
 			return fmt.Errorf("tailnet: auth_key_file and auth_key_ssm are mutually exclusive")
 		}
-		if cc.Provider == "hetzner" && cc.TailnetKeyFile == "" {
-			return fmt.Errorf("tailnet on hetzner: auth_key_file required (Hetzner has no SSM equivalent)")
-		}
-		if cc.Provider == "aws" && cc.TailnetKeySSMPath == "" {
-			return fmt.Errorf("tailnet on aws: auth_key_ssm required (avoid putting secrets in a local file)")
+		switch cc.Provider {
+		case "hetzner", "libvirt":
+			if cc.TailnetKeyFile == "" {
+				return fmt.Errorf("tailnet on %s: auth_key_file required (no managed parameter store)", cc.Provider)
+			}
+		case "aws":
+			if cc.TailnetKeySSMPath == "" {
+				return fmt.Errorf("tailnet on aws: auth_key_ssm required (avoid putting secrets in a local file)")
+			}
 		}
 	}
 

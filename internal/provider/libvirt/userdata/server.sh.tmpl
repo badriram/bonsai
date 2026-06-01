@@ -1,0 +1,39 @@
+#!/bin/sh
+# Bonsai libvirt control plane first-boot. Raw shell, no #cloud-config
+# YAML — that's the whole point of the libvirt+Alpine path. cloud-init's
+# scripts-user module execs this file at modules:final.
+set -eu
+
+# Discover this VM's reachable IP. With default libvirt NAT it's eth0; with
+# bridged it's whatever the first non-loopback NIC settled on after DHCP.
+PRIV_IP="$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1)"
+if [ -z "$PRIV_IP" ]; then
+  echo "bonsai: no IPv4 address found on any global-scope interface" >&2
+  exit 1
+fi
+
+apk add --no-cache curl openssh
+
+mkdir -p /etc/rancher/k3s
+cat > /etc/rancher/k3s/config.yaml <<EOF
+write-kubeconfig-mode: "0644"
+node-ip: "$PRIV_IP"
+advertise-address: "$PRIV_IP"
+tls-san:
+  - "$PRIV_IP"
+disable:
+  - traefik
+EOF
+
+for attempt in 1 2 3 4 5; do
+  curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+    INSTALL_K3S_SYMLINK="force" \
+    sh - && break
+  echo "bonsai: k3s install attempt $attempt failed; retrying in $((attempt*5))s" >&2
+  sleep $((attempt * 5))
+done
+rc-service k3s status >/dev/null 2>&1 || rc-service k3s start
+rc-update add k3s default
+
+touch /var/lib/bonsai-server-ready

@@ -82,9 +82,32 @@ func buildPlan(ctx context.Context, cfg bcfg.ClusterConfig, st *state.State) ([]
 		return planHetzner(ctx, cfg, st)
 	case "aws":
 		return nil, fmt.Errorf("bonsai plan: aws provider not yet supported (state.json + plan landing incrementally)")
+	case "libvirt":
+		return planLibvirt(cfg, st), nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q", cfg.Provider)
 	}
+}
+
+// planLibvirt does the desired-vs-state diff only. There's no remote
+// catalog to consult (the VM types are local CPU/RAM choices), so we don't
+// emit WARN lines for SKU deprecation here.
+func planLibvirt(cfg bcfg.ClusterConfig, st *state.State) []change {
+	if st == nil {
+		ctrl := 1
+		if cfg.HAControl {
+			ctrl = 3
+		}
+		workers := cfg.Workers
+		if workers < 1 {
+			workers = 1
+		}
+		return []change{
+			{kind: "CREATE", resource: "control_plane", msg: fmt.Sprintf("%d libvirt VM(s)", ctrl)},
+			{kind: "CREATE", resource: "workers", msg: fmt.Sprintf("%d libvirt VM(s)", workers)},
+		}
+	}
+	return diffDeclaredVsDesired(st.Declared, cfg)
 }
 
 // planHetzner runs the diff checks against Hetzner Cloud. Read-only API

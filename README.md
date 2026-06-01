@@ -153,8 +153,14 @@ Two audiences, two surfaces.
 
 ```
 bonsai grow      # provision or reconcile
-bonsai status    # what's running
+bonsai plan      # diff desired vs last-known vs cloud — no mutation
+bonsai status    # what's running (state.json + live cloud)
 ```
+
+`bonsai plan` exits 0 on no-changes, 2 on pending changes / drift, 1 on
+error — drop-in for CI gating. Catches deprecated SKUs, missing
+`admin_cidr`, and architecture-change toggles (e.g. tailnet on→off) before
+any cloud-mutating call.
 
 **Operator** (sets Bonsai up once, runs scheduled maintenance):
 
@@ -210,7 +216,7 @@ Everything else is autonomous or operator-driven.
 
 ## Status
 
-Current release: **v0.2.1** — both Hetzner HA modes (LB-fronted and tailnet-BYO) validated end-to-end on real Hetzner. Tailnet mode brings up a 3-control + 2-worker cluster with zero public 6443 surface in ~5 minutes.
+Current release: **v0.2.2** — structured `bonsai.yaml`, per-cluster `state.json`, and `bonsai plan` shipped. Both Hetzner HA modes (LB and tailnet-BYO) validated end-to-end on real Hetzner.
 
 | Phase | State |
 |---|---|
@@ -219,7 +225,8 @@ Current release: **v0.2.1** — both Hetzner HA modes (LB-fronted and tailnet-BY
 | Phase 3 Part 1 — multi-AZ + NLB scaffolding (AWS) | shipped |
 | Phase 3 Part 2 — HA control plane ASG + tailnet BYO (AWS) | shipped |
 | Phase 3 Part 3 — Hetzner HA + LB + tailnet | shipped + smoke-validated |
-| Phase 4 — DigitalOcean + GCP + libvirt providers | not started |
+| Phase 3 Part 4 — `bonsai.yaml` + `state.json` + `bonsai plan` | shipped |
+| Phase 4 — libvirt provider | not started |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full picture.
 

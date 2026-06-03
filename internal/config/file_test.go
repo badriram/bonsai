@@ -17,7 +17,7 @@ func writeTempFile(t *testing.T, name, body string) string {
 }
 
 func TestLoad_minimalHetznerHA(t *testing.T) {
-	tskey := writeTempFile(t, "key", "tskey-client-abc123-xyz\n")
+	tskey := writeTempFile(t, "key", "tskey-client-EXAMPLE\n")
 	cfgPath := writeTempFile(t, "bonsai.yaml", `
 name: smoke
 env: dev
@@ -92,7 +92,7 @@ tailnet:
 
 func TestLoad_acceptsMultilinePasteWithTskey(t *testing.T) {
 	// The exact format that broke bug #11 — Tailscale admin UI paste.
-	paste := writeTempFile(t, "ts-paste", "Client ID: k1X3ocAo\nClient secret: tskey-client-abc-def\n")
+	paste := writeTempFile(t, "ts-paste", "Client ID: EXAMPLE\nClient secret: tskey-client-EXAMPLE\n")
 	cfgPath := writeTempFile(t, "bonsai.yaml", `
 name: smoke
 env: dev

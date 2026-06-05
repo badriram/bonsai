@@ -24,8 +24,8 @@ type sshKeyPair struct {
 }
 
 func (p *Provider) ensureSSHKey(ctx context.Context, name, env string) (*sshKeyPair, error) {
-	priv, err := p.store.Read(ctx, secretKey(name, env, sshPrivateKeyKey))
-	pub, _ := p.store.Read(ctx, secretKey(name, env, sshPubKeySecret))
+	priv, err := p.store.Read(ctx, secrets.LocalKey(name, env, sshPrivateKeyKey))
+	pub, _ := p.store.Read(ctx, secrets.LocalKey(name, env, sshPubKeySecret))
 	if err == nil && priv != "" && pub != "" {
 		return &sshKeyPair{PrivateOpenSSH: priv, PublicOpenSSH: pub}, nil
 	}
@@ -43,10 +43,10 @@ func (p *Provider) ensureSSHKey(ctx context.Context, name, env string) (*sshKeyP
 		return nil, err
 	}
 	pubLine := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(authPub)))
-	if err := p.store.Write(ctx, secretKey(name, env, sshPrivateKeyKey), pemStr); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(name, env, sshPrivateKeyKey), pemStr); err != nil {
 		return nil, err
 	}
-	if err := p.store.Write(ctx, secretKey(name, env, sshPubKeySecret), pubLine); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(name, env, sshPubKeySecret), pubLine); err != nil {
 		return nil, err
 	}
 	return &sshKeyPair{PrivateOpenSSH: pemStr, PublicOpenSSH: pubLine}, nil
@@ -120,7 +120,3 @@ func (p *Provider) retrieveControlState(ctx context.Context, ip string, key *ssh
 	kc = strings.ReplaceAll(kc, "127.0.0.1", ip)
 	return strings.TrimSpace(tok), kc, nil
 }
-
-// guarantee unused-import linter doesn't fail on the secrets import in
-// this file; the type is referenced via secretKey() in provider.go.
-var _ = secrets.Store(nil)

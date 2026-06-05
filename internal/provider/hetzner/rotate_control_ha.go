@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
+
+	"github.com/badriram/bonsai/internal/secrets"
 )
 
 // rotateControlHA replaces every HA control plane server, one at a time,
@@ -49,8 +51,8 @@ func (p *Provider) rotateControlHA(ctx context.Context, name, env string, server
 	// Reconstruct the haControlSpec from current state so createHAServer
 	// emits joiner user-data with the right pre-seeded token + tailnet
 	// info if applicable.
-	token, _ := p.store.Read(ctx, secretKey(name, env, tokenSecretKey))
-	endpoint, _ := p.store.Read(ctx, secretKey(name, env, clusterEndpointKey))
+	token, _ := p.store.Read(ctx, secrets.LocalKey(name, env, tokenSecretKey))
+	endpoint, _ := p.store.Read(ctx, secrets.LocalKey(name, env, clusterEndpointKey))
 	clusterEndpoint := strings.TrimPrefix(strings.TrimSuffix(endpoint, ":6443"), "https://")
 
 	// Tailnet inference: if any server has a tailscale0 interface, this is a

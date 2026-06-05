@@ -122,13 +122,13 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("retrieve control state: %w", err)
 	}
-	if err := p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, tokenSecretKey), token); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, tokenSecretKey), token); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
-	if err := p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, kubeconfigSecretKey), kubeconfig); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, kubeconfigSecretKey), kubeconfig); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
-	if err := p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, clusterEndpointKey), "https://"+controlIP+":6443"); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, clusterEndpointKey), "https://"+controlIP+":6443"); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
 
@@ -152,8 +152,8 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		return provider.PlatformOutputs{}, fmt.Errorf("in-cluster bootstrap: %w", err)
 	}
 
-	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, postgresURLKey), out.PostgresURL)
-	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, kvURLKey), out.KVURL)
+	_ = p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, postgresURLKey), out.PostgresURL)
+	_ = p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, kvURLKey), out.KVURL)
 
 	if err := p.writeStateSingle(ctx, cfg, controlIP, fip); err != nil {
 		// Non-fatal — see writeStateHA comment.
@@ -162,7 +162,7 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 
 	return provider.PlatformOutputs{
 		ClusterEndpoint:    "https://" + controlIP + ":6443",
-		KubeconfigLocation: "file://" + secretKey(cfg.Name, cfg.Env, kubeconfigSecretKey),
+		KubeconfigLocation: "file://" + secrets.LocalKey(cfg.Name, cfg.Env, kubeconfigSecretKey),
 		PostgresURL:        out.PostgresURL,
 		KVURL:              out.KVURL,
 	}, nil

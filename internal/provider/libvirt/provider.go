@@ -128,14 +128,14 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("retrieve control state: %w", err)
 	}
-	if err := p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, tokenSecretKey), token); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, tokenSecretKey), token); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
-	if err := p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, kubeconfigSecretKey), kubeconfig); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, kubeconfigSecretKey), kubeconfig); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
 	clusterEndpoint := "https://" + controlIP + ":6443"
-	if err := p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, clusterEndpointKey), clusterEndpoint); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, clusterEndpointKey), clusterEndpoint); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
 
@@ -157,15 +157,15 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("in-cluster bootstrap: %w", err)
 	}
-	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, postgresURLKey), out.PostgresURL)
-	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, kvURLKey), out.KVURL)
+	_ = p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, postgresURLKey), out.PostgresURL)
+	_ = p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, kvURLKey), out.KVURL)
 
 	if err := p.writeState(ctx, cfg, clusterEndpoint, controlIP, control); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: state.json write failed: %v\n", err)
 	}
 	return provider.PlatformOutputs{
 		ClusterEndpoint:    clusterEndpoint,
-		KubeconfigLocation: "file://" + secretKey(cfg.Name, cfg.Env, kubeconfigSecretKey),
+		KubeconfigLocation: "file://" + secrets.LocalKey(cfg.Name, cfg.Env, kubeconfigSecretKey),
 		PostgresURL:        out.PostgresURL,
 		KVURL:              out.KVURL,
 	}, nil
@@ -204,8 +204,4 @@ func (p *Provider) BakeImage(ctx context.Context, k3sVersion string) (string, er
 }
 func (p *Provider) RotateControl(ctx context.Context, name, env string) error {
 	return fmt.Errorf("libvirt RotateControl: not implemented in V1 — destroy + grow until snapshot-restore lands")
-}
-
-func secretKey(name, env, key string) string {
-	return name + "-" + env + "/" + key
 }

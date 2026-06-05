@@ -42,6 +42,22 @@ export BONSAI_DATA_DIR=~/Sync/bonsai                  # team-shared via end-to-e
 
 For most single-operator setups, full-disk encryption + the default path is fine.
 
+**Source-of-truth per provider:**
+
+- **AWS**: SSM Parameter Store (SecureString) is the source of truth.
+  `BONSAI_DATA_DIR` is a write-through cache — every read pulls from SSM and
+  refreshes the local copy; every write hits SSM first and only updates the
+  cache after. A sibling `<key>.meta.json` records the SSM path and the
+  `refreshed_at` timestamp. If SSM is unreachable, commands fail rather than
+  serving stale state. Cache layout matches the other providers
+  (`<name>-<env>/<key>`), so apps and operators look in the same place
+  regardless of provider — only the source of truth differs.
+- **Hetzner / libvirt**: no managed remote secret store exists, so
+  `BONSAI_DATA_DIR` is itself the source of truth. There is no team-shared
+  recovery path baked in — if you need shared operator state, point
+  `BONSAI_DATA_DIR` at an end-to-end encrypted sync target or a network share
+  yourself.
+
 ## Per-cluster config — `bonsai.yaml`
 
 Commit a `bonsai.yaml` next to your app to lock the operator intent in source

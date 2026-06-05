@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // Operator-surface commands. Hidden from default help; surfaced with --advanced.
@@ -122,10 +127,16 @@ func newUpgradeCommand() *cobra.Command {
 
 func newDestroyCommand() *cobra.Command {
 	var name, env, providerName string
+	var yes bool
 	cmd := &cobra.Command{
 		Use:   "destroy",
 		Short: "Tear down a cluster (irreversible)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !yes {
+				if err := confirmDestroy(cmd.OutOrStdout(), cmd.InOrStdin(), providerName, name, env); err != nil {
+					return err
+				}
+			}
 			p, err := selectProvider(cmd.Context(), providerName)
 			if err != nil {
 				return err
@@ -136,6 +147,40 @@ func newDestroyCommand() *cobra.Command {
 	cmd.Flags().StringVar(&providerName, "provider", "aws", "")
 	cmd.Flags().StringVar(&name, "name", "", "")
 	cmd.Flags().StringVar(&env, "env", "dev", "")
+	cmd.Flags().BoolVar(&yes, "yes", false, "skip the confirmation prompt (required when stdin is not a TTY)")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
+}
+
+func confirmDestroy(out io.Writer, in io.Reader, providerName, name, env string) error {
+	backupNote := "S3 WAL backups (if configured) live outside the cluster and are preserved."
+	if providerName == "hetzner" || providerName == "libvirt" {
+		backupNote = "No managed backups exist on this provider — Postgres data is GONE after destroy."
+	}
+	fmt.Fprintf(out, `About to destroy cluster %q (env: %s, provider: %s).
+
+This will permanently delete:
+  - the control plane and all workers
+  - every workload running in namespace %q
+  - the Postgres cluster and its PersistentVolumes (all data)
+  - the Valkey instance and its data
+  - the kubeconfig and operator-state files in BONSAI_DATA_DIR
+
+%s
+
+Type the cluster name (%q) to confirm, or anything else to abort: `,
+		name, env, providerName, name+"-"+env, backupNote, name)
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return fmt.Errorf("stdin is not a TTY — re-run with --yes to confirm non-interactively")
+	}
+	reader := bufio.NewReader(in)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read confirmation: %w", err)
+	}
+	if strings.TrimSpace(line) != name {
+		return fmt.Errorf("aborted: confirmation did not match cluster name")
+	}
+	return nil
 }

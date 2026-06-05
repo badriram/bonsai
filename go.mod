@@ -14,6 +14,7 @@ require (
 	github.com/hetznercloud/hcloud-go/v2 v2.40.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.51.0
+	golang.org/x/term v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.16.3
 	k8s.io/api v0.31.3
@@ -144,7 +145,6 @@ require (
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
-	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect

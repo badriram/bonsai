@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -12,6 +13,16 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
+
+// postgresEndpoints are the three DSNs CNPG exposes via its built-in Services:
+//   - RW: primary only; safe for writes.
+//   - RO: replicas only; reads, never the primary.
+//   - R:  any healthy instance, primary included; reads with maximum availability.
+type postgresEndpoints struct {
+	RW string
+	RO string
+	R  string
+}
 
 // cnpgClusterGVR is the CNPG Cluster CRD this Bonsai release targets.
 var cnpgClusterGVR = schema.GroupVersionResource{
@@ -26,12 +37,13 @@ const (
 )
 
 // ensurePostgresCluster applies a CNPG Cluster CR and waits for CNPG to create
-// the <cluster>-app Secret. The Secret's `uri` field is what we return —
-// CNPG-managed and rotated when credentials roll.
-func ensurePostgresCluster(ctx context.Context, dyn dynamic.Interface, k8s kubernetes.Interface, c Config) (string, error) {
+// the <cluster>-app Secret, then synthesises the RW/RO/R DSNs by aiming each
+// at the matching CNPG Service. Credentials come from the CNPG-managed Secret
+// and rotate with it.
+func ensurePostgresCluster(ctx context.Context, dyn dynamic.Interface, k8s kubernetes.Interface, c Config) (postgresEndpoints, error) {
 	ns := c.AppNamespace()
 	if err := applyPostgresCluster(ctx, dyn, c, ns); err != nil {
-		return "", err
+		return postgresEndpoints{}, err
 	}
 	return waitForPostgresAppSecret(ctx, k8s, ns)
 }
@@ -75,24 +87,48 @@ func applyPostgresCluster(ctx context.Context, dyn dynamic.Interface, c Config, 
 }
 
 // waitForPostgresAppSecret polls for the Secret CNPG creates once the cluster
-// is initialized. The Secret has a `uri` field with the full DSN.
-func waitForPostgresAppSecret(ctx context.Context, k8s kubernetes.Interface, ns string) (string, error) {
+// is initialized, then derives DSNs for each Service CNPG exposes.
+func waitForPostgresAppSecret(ctx context.Context, k8s kubernetes.Interface, ns string) (postgresEndpoints, error) {
 	secretName := postgresClusterName + "-app"
 	deadline := time.Now().Add(15 * time.Minute)
 	for time.Now().Before(deadline) {
 		sec, err := k8s.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 		if err == nil {
-			if uri, ok := sec.Data["uri"]; ok && len(uri) > 0 {
-				return string(uri), nil
+			if ep, ok := buildEndpoints(sec.Data, ns); ok {
+				return ep, nil
 			}
 		} else if !errors.IsNotFound(err) {
-			return "", err
+			return postgresEndpoints{}, err
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return postgresEndpoints{}, ctx.Err()
 		case <-time.After(10 * time.Second):
 		}
 	}
-	return "", fmt.Errorf("CNPG never produced secret %s/%s within 15m", ns, secretName)
+	return postgresEndpoints{}, fmt.Errorf("CNPG never produced secret %s/%s within 15m", ns, secretName)
+}
+
+func buildEndpoints(data map[string][]byte, ns string) (postgresEndpoints, bool) {
+	user := string(data["username"])
+	pass := string(data["password"])
+	db := string(data["dbname"])
+	port := string(data["port"])
+	if user == "" || pass == "" || db == "" || port == "" {
+		return postgresEndpoints{}, false
+	}
+	build := func(svcSuffix string) string {
+		u := &url.URL{
+			Scheme: "postgresql",
+			User:   url.UserPassword(user, pass),
+			Host:   fmt.Sprintf("%s-%s.%s.svc.cluster.local:%s", postgresClusterName, svcSuffix, ns, port),
+			Path:   "/" + db,
+		}
+		return u.String()
+	}
+	return postgresEndpoints{
+		RW: build("rw"),
+		RO: build("ro"),
+		R:  build("r"),
+	}, true
 }

@@ -64,7 +64,7 @@ func Bootstrap(ctx context.Context, c Config) (Outputs, error) {
 		return Outputs{}, err
 	}
 
-	pgURL, err := ensurePostgresCluster(ctx, clients.dyn, clients.k8s, c)
+	pg, err := ensurePostgresCluster(ctx, clients.dyn, clients.k8s, c)
 	if err != nil {
 		return Outputs{}, fmt.Errorf("postgres cluster: %w", err)
 	}
@@ -81,14 +81,21 @@ func Bootstrap(ctx context.Context, c Config) (Outputs, error) {
 		return Outputs{}, fmt.Errorf("system-upgrade-controller: %w", err)
 	}
 
-	if err := mirrorSecret(ctx, clients.k8s, c.AppNamespace(), "bonsai-postgres", pgURL); err != nil {
-		return Outputs{}, fmt.Errorf("mirror postgres secret: %w", err)
+	pgSecrets := map[string]string{
+		"bonsai-postgres":    pg.RW,
+		"bonsai-postgres-ro": pg.RO,
+		"bonsai-postgres-r":  pg.R,
+	}
+	for name, u := range pgSecrets {
+		if err := mirrorSecret(ctx, clients.k8s, c.AppNamespace(), name, u); err != nil {
+			return Outputs{}, fmt.Errorf("mirror %s: %w", name, err)
+		}
 	}
 	if err := mirrorSecret(ctx, clients.k8s, c.AppNamespace(), "bonsai-kv", kvURL); err != nil {
 		return Outputs{}, fmt.Errorf("mirror kv secret: %w", err)
 	}
 
-	return Outputs{PostgresURL: pgURL, KVURL: kvURL}, nil
+	return Outputs{PostgresURL: pg.RW, KVURL: kvURL}, nil
 }
 
 // UpgradeComponent re-runs the install for a single component against its

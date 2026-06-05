@@ -9,6 +9,8 @@ import (
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/badriram/bonsai/internal/secrets"
 )
 
 // RotateWorkers replaces every worker, one at a time:
@@ -43,11 +45,11 @@ func (p *Provider) RotateWorkers(ctx context.Context, name, env, imageRef string
 	}
 
 	// Need the token + control IP + ssh key for new worker cloud-init.
-	token, err := p.store.Read(ctx, secretKey(name, env, tokenSecretKey))
+	token, err := p.store.Read(ctx, secrets.LocalKey(name, env, tokenSecretKey))
 	if err != nil {
 		return fmt.Errorf("read token: %w", err)
 	}
-	endpoint, err := p.store.Read(ctx, secretKey(name, env, clusterEndpointKey))
+	endpoint, err := p.store.Read(ctx, secrets.LocalKey(name, env, clusterEndpointKey))
 	if err != nil {
 		return fmt.Errorf("read endpoint: %w", err)
 	}
@@ -121,7 +123,7 @@ func (p *Provider) resolveWorkerImage(ctx context.Context, ref string) (*hcloud.
 }
 
 func (p *Provider) k8sClient(ctx context.Context, name, env string) (kubernetes.Interface, error) {
-	kc, err := p.store.Read(ctx, secretKey(name, env, kubeconfigSecretKey))
+	kc, err := p.store.Read(ctx, secrets.LocalKey(name, env, kubeconfigSecretKey))
 	if err != nil {
 		return nil, fmt.Errorf("read kubeconfig: %w", err)
 	}

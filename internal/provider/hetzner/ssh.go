@@ -11,6 +11,8 @@ import (
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/badriram/bonsai/internal/secrets"
 )
 
 const (
@@ -47,7 +49,7 @@ func (p *Provider) ensureSSHKey(ctx context.Context, name, env string) (*hcloud.
 	if err != nil {
 		return nil, err
 	}
-	if err := p.store.Write(ctx, secretKey(name, env, sshLocalKeyName), string(privPEM)); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(name, env, sshLocalKeyName), string(privPEM)); err != nil {
 		return nil, fmt.Errorf("save private key: %w", err)
 	}
 	key, _, err := p.client.SSHKey.Create(ctx, hcloud.SSHKeyCreateOpts{
@@ -64,17 +66,17 @@ func (p *Provider) ensureSSHKey(ctx context.Context, name, env string) (*hcloud.
 // ensureHostKey is idempotent: returns immediately if a host key is already
 // stored for the cluster, otherwise generates one and writes both halves.
 func (p *Provider) ensureHostKey(ctx context.Context, name, env string) error {
-	if _, err := p.store.Read(ctx, secretKey(name, env, sshHostKeyName)); err == nil {
+	if _, err := p.store.Read(ctx, secrets.LocalKey(name, env, sshHostKeyName)); err == nil {
 		return nil
 	}
 	authorized, privPEM, err := generateHostKey()
 	if err != nil {
 		return err
 	}
-	if err := p.store.Write(ctx, secretKey(name, env, sshHostKeyName), string(privPEM)); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(name, env, sshHostKeyName), string(privPEM)); err != nil {
 		return fmt.Errorf("save host private key: %w", err)
 	}
-	if err := p.store.Write(ctx, secretKey(name, env, sshHostPubName), authorized); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(name, env, sshHostPubName), authorized); err != nil {
 		return fmt.Errorf("save host public key: %w", err)
 	}
 	return nil
@@ -83,11 +85,11 @@ func (p *Provider) ensureHostKey(ctx context.Context, name, env string) error {
 // hostKeyMaterial returns the cluster's host key in the two forms cloud-init
 // + cloud-config templates need.
 func (p *Provider) hostKeyMaterial(ctx context.Context, name, env string) (privPEM, authorizedPub string, err error) {
-	priv, err := p.store.Read(ctx, secretKey(name, env, sshHostKeyName))
+	priv, err := p.store.Read(ctx, secrets.LocalKey(name, env, sshHostKeyName))
 	if err != nil {
 		return "", "", fmt.Errorf("read host private key: %w", err)
 	}
-	pub, err := p.store.Read(ctx, secretKey(name, env, sshHostPubName))
+	pub, err := p.store.Read(ctx, secrets.LocalKey(name, env, sshHostPubName))
 	if err != nil {
 		return "", "", fmt.Errorf("read host public key: %w", err)
 	}
@@ -101,7 +103,7 @@ func (p *Provider) hostKeyMaterial(ctx context.Context, name, env string) (privP
 // no anchor to authenticate the server, which is the exact MITM gap the
 // previous InsecureIgnoreHostKey enabled.
 func (p *Provider) sshClient(ctx context.Context, name, env, ip string) (*ssh.Client, error) {
-	privPEM, err := p.store.Read(ctx, secretKey(name, env, sshLocalKeyName))
+	privPEM, err := p.store.Read(ctx, secrets.LocalKey(name, env, sshLocalKeyName))
 	if err != nil {
 		return nil, fmt.Errorf("read private key: %w", err)
 	}
@@ -109,7 +111,7 @@ func (p *Provider) sshClient(ctx context.Context, name, env, ip string) (*ssh.Cl
 	if err != nil {
 		return nil, err
 	}
-	hostPubLine, err := p.store.Read(ctx, secretKey(name, env, sshHostPubName))
+	hostPubLine, err := p.store.Read(ctx, secrets.LocalKey(name, env, sshHostPubName))
 	if err != nil {
 		return nil, fmt.Errorf("read host public key (cluster may predate host-key fix — destroy + grow to migrate): %w", err)
 	}
@@ -222,9 +224,4 @@ func waitForSSH(ctx context.Context, ip string, timeout time.Duration) error {
 // the kubeconfig works from outside the server.
 func rewriteKubeconfig(raw, ip string) string {
 	return strings.ReplaceAll(raw, "127.0.0.1", ip)
-}
-
-// secretKey returns the FileSecretStore key path for cluster-scoped secrets.
-func secretKey(name, env, key string) string {
-	return name + "-" + env + "/" + key
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 
 	"github.com/badriram/bonsai/internal/progress"
+	"github.com/badriram/bonsai/internal/secrets"
 )
 
 // HA control plane orchestration on Hetzner.
@@ -250,7 +251,7 @@ func (p *Provider) readTailnetIP(ctx context.Context, name, env, ip string) (str
 // call. Same value goes into leader + joiner + worker user-data; k3s uses it
 // as both the cluster secret and the agent join token.
 func (p *Provider) ensureHAToken(ctx context.Context, name, env string) (string, error) {
-	key := secretKey(name, env, tokenSecretKey)
+	key := secrets.LocalKey(name, env, tokenSecretKey)
 	if existing, err := p.store.Read(ctx, key); err == nil && existing != "" {
 		return existing, nil
 	}

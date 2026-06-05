@@ -12,6 +12,7 @@ import (
 	bcfg "github.com/badriram/bonsai/internal/config"
 	"github.com/badriram/bonsai/internal/progress"
 	"github.com/badriram/bonsai/internal/provider"
+	"github.com/badriram/bonsai/internal/secrets"
 	"github.com/badriram/bonsai/internal/state"
 )
 
@@ -142,12 +143,12 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 		return provider.PlatformOutputs{}, fmt.Errorf("fetch kubeconfig: %w", err)
 	}
 	kubeconfig = rewriteKubeconfig(kubeconfig, clusterEndpoint)
-	token, _ := p.store.Read(ctx, secretKey(cfg.Name, cfg.Env, tokenSecretKey)) // pre-seeded in ensureHAToken
+	token, _ := p.store.Read(ctx, secrets.LocalKey(cfg.Name, cfg.Env, tokenSecretKey)) // pre-seeded in ensureHAToken
 
-	if err := p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, kubeconfigSecretKey), kubeconfig); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, kubeconfigSecretKey), kubeconfig); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
-	if err := p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, clusterEndpointKey), "https://"+clusterEndpoint+":6443"); err != nil {
+	if err := p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, clusterEndpointKey), "https://"+clusterEndpoint+":6443"); err != nil {
 		return provider.PlatformOutputs{}, err
 	}
 
@@ -171,8 +172,8 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 		return provider.PlatformOutputs{}, fmt.Errorf("in-cluster bootstrap: %w", err)
 	}
 
-	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, postgresURLKey), out.PostgresURL)
-	_ = p.store.Write(ctx, secretKey(cfg.Name, cfg.Env, kvURLKey), out.KVURL)
+	_ = p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, postgresURLKey), out.PostgresURL)
+	_ = p.store.Write(ctx, secrets.LocalKey(cfg.Name, cfg.Env, kvURLKey), out.KVURL)
 
 	if err := p.writeStateHA(ctx, cfg, clusterEndpoint, leaderReachableIP, tailnetMode, network, fw, lbInfra, sshKey, image, k3sVersion); err != nil {
 		// Non-fatal: cluster is up, kubeconfig written. State is a perf
@@ -183,7 +184,7 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 
 	return provider.PlatformOutputs{
 		ClusterEndpoint:    "https://" + clusterEndpoint + ":6443",
-		KubeconfigLocation: "file://" + secretKey(cfg.Name, cfg.Env, kubeconfigSecretKey),
+		KubeconfigLocation: "file://" + secrets.LocalKey(cfg.Name, cfg.Env, kubeconfigSecretKey),
 		PostgresURL:        out.PostgresURL,
 		KVURL:              out.KVURL,
 	}, nil

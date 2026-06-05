@@ -39,6 +39,13 @@ func New(ctx context.Context) (*Provider, error) {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
 	ssmClient := ssm.NewFromConfig(cfg)
+	dataDir, err := secrets.DefaultDataDir()
+	if err != nil {
+		return nil, err
+	}
+	remote := secrets.NewParameterStore(ssmClient)
+	cache := secrets.NewFile(dataDir)
+	store := secrets.NewCached(remote, cache, secrets.SSMToLocal, func(k string) string { return "ssm://" + k })
 	return &Provider{
 		awsCfg:    cfg,
 		ec2:       ec2.NewFromConfig(cfg),
@@ -46,7 +53,7 @@ func New(ctx context.Context) (*Provider, error) {
 		iam:       iam.NewFromConfig(cfg),
 		ssm:       ssmClient,
 		elbv2:     elasticloadbalancingv2.NewFromConfig(cfg),
-		store:     secrets.NewParameterStore(ssmClient),
+		store:     store,
 		envLookup: os.Getenv,
 	}, nil
 }

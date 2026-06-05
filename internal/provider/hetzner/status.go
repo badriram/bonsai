@@ -7,6 +7,7 @@ import (
 
 	"github.com/badriram/bonsai/internal/cluster"
 	"github.com/badriram/bonsai/internal/provider"
+	"github.com/badriram/bonsai/internal/secrets"
 )
 
 // Status: read-only snapshot from Hetzner API + the locally stored kubeconfig.
@@ -46,7 +47,7 @@ func (p *Provider) Status(ctx context.Context, name, env string) (provider.Platf
 // is provider-agnostic and only needs the kubeconfig.
 
 func (p *Provider) UpgradeK3s(ctx context.Context, name, env, version string) error {
-	kc, err := p.store.Read(ctx, secretKey(name, env, kubeconfigSecretKey))
+	kc, err := p.store.Read(ctx, secrets.LocalKey(name, env, kubeconfigSecretKey))
 	if err != nil {
 		return err
 	}
@@ -54,7 +55,7 @@ func (p *Provider) UpgradeK3s(ctx context.Context, name, env, version string) er
 }
 
 func (p *Provider) UpgradeComponent(ctx context.Context, name, env, component string) error {
-	kc, err := p.store.Read(ctx, secretKey(name, env, kubeconfigSecretKey))
+	kc, err := p.store.Read(ctx, secrets.LocalKey(name, env, kubeconfigSecretKey))
 	if err != nil {
 		return err
 	}

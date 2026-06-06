@@ -14,6 +14,22 @@ fi
 
 apk add --no-cache curl openssh
 
+# Alpine's sshd_config defaults to `AllowTcpForwarding no`, which blocks
+# the SSH local-forward Bonsai opens on macOS to reach the k3s API server.
+# (macOS rejects connect() from non-Apple-signed binaries to vmnet-bridged
+# IPs; loopback is unrestricted, hence the tunnel.) Flip it on and reload
+# sshd before any client tries to use forwarding.
+sed -i 's/^AllowTcpForwarding no/AllowTcpForwarding yes/' /etc/ssh/sshd_config
+rc-service sshd reload || rc-service sshd restart
+
+# k3s requires cgroups. Alpine's cloud image doesn't mount them at boot —
+# enable the OpenRC cgroups service so /sys/fs/cgroup exists before k3s
+# launches, then start it now for the current boot. Without this k3s exits
+# with "cgroups: cgroup mountpoint does not exist" and supervise-daemon
+# respawns it forever.
+rc-update add cgroups sysinit
+rc-service cgroups start || true
+
 mkdir -p /etc/rancher/k3s
 cat > /etc/rancher/k3s/config.yaml <<EOF
 write-kubeconfig-mode: "0644"
@@ -21,6 +37,7 @@ node-ip: "$PRIV_IP"
 advertise-address: "$PRIV_IP"
 tls-san:
   - "$PRIV_IP"
+  - "127.0.0.1"
 disable:
   - traefik
 EOF

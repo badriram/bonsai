@@ -17,7 +17,8 @@ import (
 // is shared across clusters — every libvirt cluster on this host uses the
 // same backing file via qcow2 overlays.
 func (p *Provider) ensureBaseImage(ctx context.Context) (string, error) {
-	u, err := url.Parse(defaultImageURL)
+	imageURL := defaultBaseImageURL()
+	u, err := url.Parse(imageURL)
 	if err != nil {
 		return "", err
 	}
@@ -34,17 +35,17 @@ func (p *Provider) ensureBaseImage(ctx context.Context) (string, error) {
 	}
 	defer f.Close()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, defaultImageURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
 		return "", err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("download %s: %w", defaultImageURL, err)
+		return "", fmt.Errorf("download %s: %w", imageURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download %s: HTTP %d", defaultImageURL, resp.StatusCode)
+		return "", fmt.Errorf("download %s: HTTP %d", imageURL, resp.StatusCode)
 	}
 
 	hasher := sha256.New()

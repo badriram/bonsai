@@ -12,6 +12,57 @@ bootstrap — to catch breakage that unit-shaped checks (`make check`) can't.
 |---|---|---|
 | AWS | `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`+`AWS_SECRET_ACCESS_KEY`; default region | `aws s3 mb s3://bonsai-backups-<account-id>` (one-time per account) |
 | Hetzner | `HCLOUD_TOKEN` env var | nothing — Bonsai allocates SSH keys + floating IPs itself |
+| libvirt | none — local hypervisor | see [Libvirt prerequisites](#libvirt-prerequisites) below |
+
+### Libvirt prerequisites
+
+Bonsai talks to libvirt via system-mode `qemu:///system`. That gives us a
+real `default` NAT network, multi-VM addressability without port-forwarding
+gymnastics, and the same code path on Linux and macOS.
+
+**Linux** (Ubuntu/Debian/Fedora):
+
+```sh
+sudo apt-get install -y libvirt-daemon-system qemu-system-x86 qemu-utils genisoimage ovmf
+sudo systemctl enable --now libvirtd
+sudo virsh net-autostart default
+sudo virsh net-start default
+sudo usermod -aG libvirt $USER   # log out + back in so virsh runs without sudo
+```
+
+**macOS** (one-time, requires `sudo` for the daemon):
+
+```sh
+brew install libvirt qemu xorriso        # xorriso provides mkisofs
+sudo brew services start libvirt          # libvirtd runs as root via launchd
+sudo /opt/homebrew/sbin/virtlogd --daemon # libvirtd's log daemon (no brew service for it)
+```
+
+Brew's libvirt socket is root-only by default — you'll need sudo for every
+`virsh` invocation, and `sudo bonsai grow` would leave kubeconfig + SSH
+keys owned by root. Fix the socket once so your user can use it:
+
+```sh
+sudo sed -i.bak -E \
+  -e 's|^#unix_sock_group = "libvirt"|unix_sock_group = "staff"|' \
+  -e 's|^#unix_sock_rw_perms = "0770"|unix_sock_rw_perms = "0770"|' \
+  -e 's|^#auth_unix_rw = "none"|auth_unix_rw = "none"|' \
+  /opt/homebrew/etc/libvirt/libvirtd.conf
+sudo brew services restart libvirt
+```
+
+macOS's `if_bridge` doesn't support the Linux-bridge rename libvirt's
+`default` network needs, so Bonsai uses `<interface type='user'><source
+mode='shared'/>` instead — qemu's vmnet-shared backend, giving each VM a
+DHCP-leased 192.168.64.x address. No `virsh net-start default` needed.
+
+`bonsai grow --provider libvirt` will refuse to start if the `default`
+network isn't active and prints the exact `virsh net-start` command to run.
+
+Apple Silicon hosts auto-pick the aarch64 Alpine cloud image. Override the
+arch image with `BONSAI_LIBVIRT_IMAGE_URL` for bake-image outputs. macOS
+hosts also default the domain accelerator to `qemu` (TCG) — set
+`BONSAI_LIBVIRT_DOMAIN_TYPE=hvf` on libvirt >= 7.10 to get HVF acceleration.
 
 Build a fresh binary first:
 

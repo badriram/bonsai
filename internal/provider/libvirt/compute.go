@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -44,20 +45,35 @@ func provisionedDiskGB(cfg bcfg.ClusterConfig) int64 {
 // structs to XML rather than templating strings so the indentation /
 // escaping bug-#11 class can't sneak back in via a different door.
 type domainXML struct {
-	XMLName xml.Name `xml:"domain"`
-	Type    string   `xml:"type,attr"`
-	Name    string   `xml:"name"`
-	Memory  unitVal  `xml:"memory"`
-	VCPU    int      `xml:"vcpu"`
-	OS      osBlock  `xml:"os"`
-	Devices devices  `xml:"devices"`
+	XMLName   xml.Name `xml:"domain"`
+	XmlnsQemu string   `xml:"xmlns:qemu,attr,omitempty"`
+	Type      string   `xml:"type,attr"`
+	Name      string   `xml:"name"`
+	Memory    unitVal  `xml:"memory"`
+	VCPU      int      `xml:"vcpu"`
+	OS        osBlock  `xml:"os"`
+	Devices   devices  `xml:"devices"`
+	// QemuCmd is populated on macOS where libvirt can't yet model
+	// vmnet-shared via <interface>; we inject `-netdev vmnet-shared` raw.
+	QemuCmd *qemuCommandline `xml:"qemu:commandline,omitempty"`
+}
+type qemuCommandline struct {
+	Args []qemuArg `xml:"qemu:arg"`
+}
+type qemuArg struct {
+	Value string `xml:"value,attr"`
 }
 type unitVal struct {
 	Unit  string `xml:"unit,attr"`
 	Value int    `xml:",chardata"`
 }
 type osBlock struct {
-	Type osType `xml:"type"`
+	// Firmware="efi" tells libvirt+QEMU to autoselect OVMF/EDK2. Mandatory on
+	// aarch64 (no legacy BIOS exists); also required by Alpine's UEFI cloud
+	// images on x86_64 — the `*-uefi-*` qcow2 has its boot loader stub
+	// configured for EDK2 only, so SeaBIOS fails to find a bootable entry.
+	Firmware string `xml:"firmware,attr,omitempty"`
+	Type     osType `xml:"type"`
 }
 type osType struct {
 	Arch    string `xml:"arch,attr"`
@@ -90,12 +106,21 @@ type diskTarget struct {
 	Bus string `xml:"bus,attr"`
 }
 type iface struct {
-	Type    string     `xml:"type,attr"`
-	Source  ifaceSrc   `xml:"source"`
-	Model   ifaceModel `xml:"model"`
+	Type   string     `xml:"type,attr"`
+	MAC    *ifaceMAC  `xml:"mac,omitempty"`
+	Source ifaceSrc   `xml:"source"`
+	Model  ifaceModel `xml:"model"`
+}
+type ifaceMAC struct {
+	Address string `xml:"address,attr"`
 }
 type ifaceSrc struct {
-	Network string `xml:"network,attr"`
+	// Network is set on Linux (`<source network='default'/>`); Mode is set on
+	// macOS where we use `<interface type='vmnet'><source mode='shared'/>`
+	// because libvirt's default Linux-bridge network can't exist on Darwin
+	// (if_bridge doesn't support interface rename to virbr0).
+	Network string `xml:"network,attr,omitempty"`
+	Mode    string `xml:"mode,attr,omitempty"`
 }
 type ifaceModel struct {
 	Type string `xml:"type,attr"`
@@ -169,19 +194,15 @@ func (p *Provider) createVM(ctx context.Context, cfg bcfg.ClusterConfig, name, b
 		return "", "", fmt.Errorf("buildNoCloudISO: %w", err)
 	}
 
-	domainType := os.Getenv("BONSAI_LIBVIRT_DOMAIN_TYPE")
-	if domainType == "" {
-		// kvm on Linux; macOS operators (brew libvirt + qemu) want qemu
-		// because no KVM kernel module — HVF still uses domain type=qemu.
-		domainType = "kvm"
-	}
+	arch, machine := libvirtArch()
 	d := domainXML{
-		Type:   domainType,
+		Type:   defaultDomainType(),
 		Name:   name,
 		Memory: unitVal{Unit: "MiB", Value: defaultMemoryMB},
 		VCPU:   defaultVCPUs,
 		OS: osBlock{
-			Type: osType{Arch: "x86_64", Machine: "q35", Value: "hvm"},
+			Firmware: "efi",
+			Type:     osType{Arch: arch, Machine: machine, Value: "hvm"},
 		},
 		Devices: devices{
 			Disks: []disk{
@@ -200,19 +221,17 @@ func (p *Provider) createVM(ctx context.Context, cfg bcfg.ClusterConfig, name, b
 					Target: diskTarget{Dev: "sda", Bus: "sata"},
 				},
 			},
-			Interfaces: []iface{
-				{
-					Type:   "network",
-					Source: ifaceSrc{Network: defaultNetwork},
-					Model:  ifaceModel{Type: "virtio"},
-				},
-			},
+			Interfaces: guestInterfaces(name),
 			Console: consoleBlk{Type: "pty"},
 			Channels: []channel{
 				{Type: "unix", Target: channelTarget{Type: "virtio", Name: "org.qemu.guest_agent.0"}},
 			},
 			Graphics: []graphics{{Type: "vnc", Listen: "127.0.0.1"}},
 		},
+	}
+	if args := guestQemuArgs(name); len(args) > 0 {
+		d.XmlnsQemu = "http://libvirt.org/schemas/domain/qemu/1.0"
+		d.QemuCmd = &qemuCommandline{Args: args}
 	}
 	xmlBytes, err := xml.MarshalIndent(d, "", "  ")
 	if err != nil {
@@ -236,7 +255,7 @@ func (p *Provider) createVM(ctx context.Context, cfg bcfg.ClusterConfig, name, b
 	}
 	uuid := strings.TrimSpace(string(uuidOut))
 
-	ip, err := p.waitForVMIP(ctx, name, sshReadyTimeout)
+	ip, err := p.waitForGuestIP(ctx, name, sshReadyTimeout)
 	if err != nil {
 		return uuid, "", err
 	}
@@ -246,7 +265,12 @@ func (p *Provider) createVM(ctx context.Context, cfg bcfg.ClusterConfig, name, b
 // waitForVMIP polls `virsh domifaddr <name>` until the lease appears.
 // virsh's default source is "lease" which works for libvirt's default NAT
 // network; for bridged networks an operator may need --source agent.
-func (p *Provider) waitForVMIP(ctx context.Context, name string, timeout time.Duration) (string, error) {
+func (p *Provider) waitForGuestIP(ctx context.Context, name string, timeout time.Duration) (string, error) {
+	// macOS: VM is on Apple's vmnet shared subnet (192.168.64.0/24); leases
+	// land in /var/db/dhcpd_leases keyed by MAC, not in libvirt's database.
+	if runtime.GOOS == "darwin" {
+		return lookupVMNetIP(ctx, deterministicMAC(name), timeout)
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		out, err := virsh(ctx, p.uri, "domifaddr", name)

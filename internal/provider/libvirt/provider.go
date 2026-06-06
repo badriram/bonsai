@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/badriram/bonsai/internal/cluster"
@@ -34,13 +35,15 @@ import (
 const (
 	defaultURI         = "qemu:///system"
 	defaultK3sVersion  = "v1.31.0+k3s1"
-	defaultImageURL    = "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-uefi-cloudinit-r0.qcow2"
 	defaultImageSHA256 = "" // empty = trust HTTPS for V1; fill in once we pin a version
 	defaultNetwork     = "default"
-	defaultMemoryMB = 2048
-	defaultVCPUs    = 2
+	defaultMemoryMB    = 2048
+	defaultVCPUs       = 2
 
-	sshReadyTimeout = 5 * time.Minute
+	// 10 min — Alpine first boot + cloud-init + cgroups + apk add + k3s
+	// install + sshd start takes 5–6 min on macOS HVF; doubling that for
+	// slower hosts and image-pull latency.
+	sshReadyTimeout = 10 * time.Minute
 	k3sReadyTimeout = 10 * time.Minute
 
 	tokenSecretKey      = "token"
@@ -85,6 +88,13 @@ func New(ctx context.Context) (*Provider, error) {
 	// fast error instead of a delayed VM-create failure.
 	if out, err := virsh(ctx, uri, "version"); err != nil {
 		return nil, fmt.Errorf("virsh connect %s: %w (output: %s)", uri, err, string(out))
+	}
+	// Default NAT network must exist and be active before VM-create. This is
+	// the load-bearing one-time setup step on macOS and on freshly-installed
+	// Linux libvirt — fail with the fix-it command rather than a virsh error
+	// 10 minutes into provisioning.
+	if err := ensureDefaultNetworkActive(ctx, uri); err != nil {
+		return nil, err
 	}
 	return &Provider{
 		uri:      uri,
@@ -148,8 +158,23 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	}
 
 	progress.Step("running in-cluster bootstrap (helm: cnpg, valkey, kured, suc)")
+	bootstrapKubeconfig := kubeconfig
+	if runtime.GOOS == "darwin" {
+		// macOS's kernel rejects connect() from non-Apple-signed binaries to
+		// vmnet-bridged guest IPs. Bonsai's embedded helm + client-go would
+		// fail dialing the k3s API at the guest IP. Open a loopback tunnel
+		// (Apple-signed ssh sets it up; loopback connects are unrestricted)
+		// and rewrite the bootstrap-time kubeconfig to point at it. The
+		// kubeconfig saved to BONSAI_DATA_DIR keeps the guest IP unchanged.
+		cleanup, tunneledKC, err := tunnelKubeconfigDarwin(ctx, controlIP, sshKey, kubeconfig)
+		if err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("bootstrap tunnel: %w", err)
+		}
+		defer cleanup()
+		bootstrapKubeconfig = tunneledKC
+	}
 	out, err := cluster.Bootstrap(ctx, cluster.Config{
-		Kubeconfig:         []byte(kubeconfig),
+		Kubeconfig:         []byte(bootstrapKubeconfig),
 		Name:               cfg.Name,
 		Env:                cfg.Env,
 		PostgresVolumeSize: cfg.PostgresVolumeSize,

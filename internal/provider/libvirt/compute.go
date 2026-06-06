@@ -10,7 +10,35 @@ import (
 	"time"
 
 	bcfg "github.com/badriram/bonsai/internal/config"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+// libvirtHeadroomGB is the OS + k3s + image-pull margin reserved on top of
+// the operator's postgres.volume_size when we size the qcow2 overlay. qcow2
+// is thin so the bytes only materialise on the host disk as Postgres + the
+// rest of the VM actually fill them — pick a generous number that keeps
+// homelab clusters from running into ENOSPC while keeping default host disk
+// usage near zero.
+const libvirtHeadroomGB = 20
+
+// provisionedDiskGB derives the qcow2 virtual size from the declared Postgres
+// volume size + a fixed OS/k3s headroom. libvirt cannot resize PVCs at
+// runtime (local-path-provisioner has no expand capability), so the size
+// chosen at first grow is the cluster's ceiling until destroy+grow.
+func provisionedDiskGB(cfg bcfg.ClusterConfig) int64 {
+	pgGiB := int64(10)
+	if cfg.PostgresVolumeSize != "" {
+		if q, err := resource.ParseQuantity(cfg.PostgresVolumeSize); err == nil {
+			gi := q.Value() / (1 << 30)
+			if q.Value()%(1<<30) != 0 {
+				gi++
+			}
+			pgGiB = gi
+		}
+	}
+	return pgGiB + libvirtHeadroomGB
+}
 
 // domainXML mirrors a tiny subset of libvirt's domain.xsd. We marshal Go
 // structs to XML rather than templating strings so the indentation /
@@ -132,7 +160,8 @@ func (p *Provider) createVM(ctx context.Context, cfg bcfg.ClusterConfig, name, b
 		return "", "", err
 	}
 	overlay := filepath.Join(pool, name+".qcow2")
-	if _, err := qemuImg(ctx, "create", "-F", "qcow2", "-b", baseImage, "-f", "qcow2", overlay, fmt.Sprintf("%dG", defaultDiskGB)); err != nil {
+	diskGB := provisionedDiskGB(cfg)
+	if _, err := qemuImg(ctx, "create", "-F", "qcow2", "-b", baseImage, "-f", "qcow2", overlay, fmt.Sprintf("%dG", diskGB)); err != nil {
 		return "", "", fmt.Errorf("qemu-img create overlay: %w", err)
 	}
 	isoPath := filepath.Join(pool, name+"-seed.iso")

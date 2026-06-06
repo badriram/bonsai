@@ -16,11 +16,12 @@ import (
 
 // Config is what the AWS provider hands to Bootstrap after k3s is ready.
 type Config struct {
-	Kubeconfig   []byte
-	Name         string
-	Env          string
-	BackupBucket string // S3 bucket for CNPG backups
-	BackupRegion string
+	Kubeconfig         []byte
+	Name               string
+	Env                string
+	BackupBucket       string // S3 bucket for CNPG backups
+	BackupRegion       string
+	PostgresVolumeSize string // Kubernetes Quantity, e.g. "10Gi"
 }
 
 // Outputs are the connection strings Bonsai writes back to Parameter Store

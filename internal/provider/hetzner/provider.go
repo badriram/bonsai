@@ -141,9 +141,10 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	}
 
 	out, err := cluster.Bootstrap(ctx, cluster.Config{
-		Kubeconfig: []byte(kubeconfig),
-		Name:       cfg.Name,
-		Env:        cfg.Env,
+		Kubeconfig:         []byte(kubeconfig),
+		Name:               cfg.Name,
+		Env:                cfg.Env,
+		PostgresVolumeSize: cfg.PostgresVolumeSize,
 		// BackupBucket left empty — Hetzner has no managed S3. CNPG runs
 		// without barmanObjectStore; configure external S3 (R2, Backblaze) as
 		// a Phase 2.1 follow-up if backups are required.

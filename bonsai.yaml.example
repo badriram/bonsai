@@ -39,8 +39,13 @@ k3s_version: v1.31.0+k3s1
 
 # CNPG postgres replica count. 1 for dev/staging (halves cost), 2 default,
 # 3 for production HA with synchronous replication.
+# volume_size is the per-instance PVC. Default 10Gi. Bumping triggers an
+# online PVC expansion on AWS (gp3) and Hetzner (Cloud Volumes). On libvirt
+# the value is the qcow2 ceiling fixed at first grow — `bonsai plan` warns
+# if you try to change it later. Shrinks are never honored.
 postgres:
   instances: 2
+  volume_size: 10Gi
 
 # Tailnet-BYO mode: zero public 6443 surface; only members of your tailnet
 # can reach the API. Operator must be on the same tailnet.

@@ -138,3 +138,68 @@ mystery_field: oops
 		t.Fatalf("expected unknown-field error, got %v", err)
 	}
 }
+
+func TestLoad_defaultsPostgresVolumeSize(t *testing.T) {
+	t.Setenv("BONSAI_ADMIN_CIDR", "1.2.3.4/32")
+	cfgPath := writeTempFile(t, "bonsai.yaml", `
+name: smoke
+env: dev
+provider: hetzner
+admin_cidr: 1.2.3.4/32
+`)
+	cc, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cc.PostgresVolumeSize != DefaultPostgresVolumeSize {
+		t.Fatalf("got %q, want default %q", cc.PostgresVolumeSize, DefaultPostgresVolumeSize)
+	}
+}
+
+func TestLoad_acceptsExplicitPostgresVolumeSize(t *testing.T) {
+	cfgPath := writeTempFile(t, "bonsai.yaml", `
+name: smoke
+env: dev
+provider: hetzner
+admin_cidr: 1.2.3.4/32
+postgres:
+  volume_size: 200Gi
+`)
+	cc, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cc.PostgresVolumeSize != "200Gi" {
+		t.Fatalf("got %q, want 200Gi", cc.PostgresVolumeSize)
+	}
+}
+
+func TestLoad_rejectsMalformedPostgresVolumeSize(t *testing.T) {
+	cfgPath := writeTempFile(t, "bonsai.yaml", `
+name: smoke
+env: dev
+provider: hetzner
+admin_cidr: 1.2.3.4/32
+postgres:
+  volume_size: lots
+`)
+	_, err := Load(cfgPath)
+	if err == nil || !strings.Contains(err.Error(), "volume_size") {
+		t.Fatalf("expected volume_size parse error, got %v", err)
+	}
+}
+
+func TestLoad_rejectsBelowMinimumPostgresVolumeSize(t *testing.T) {
+	cfgPath := writeTempFile(t, "bonsai.yaml", `
+name: smoke
+env: dev
+provider: hetzner
+admin_cidr: 1.2.3.4/32
+postgres:
+  volume_size: 100Mi
+`)
+	_, err := Load(cfgPath)
+	if err == nil || !strings.Contains(err.Error(), "at least") {
+		t.Fatalf("expected minimum-size error, got %v", err)
+	}
+}

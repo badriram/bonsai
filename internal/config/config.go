@@ -36,6 +36,14 @@ type ClusterConfig struct {
 	// production with synchronous replication and HA failover.
 	PostgresInstances int
 
+	// PostgresVolumeSize is the per-instance PVC size as a Kubernetes Quantity
+	// (e.g. "10Gi", "200Gi"). Default "10Gi". On AWS and Hetzner, bumping
+	// this triggers an online PVC expansion (CSI supports it). On libvirt,
+	// storage is qcow2-thin-provisioned upfront at provision time — runtime
+	// bumps are refused at `plan` time. Shrinking is never honored (storage
+	// is kept at max(declared, existing) to prevent data loss).
+	PostgresVolumeSize string
+
 	// HAControl, when true, provisions a 3-node embedded-etcd control plane
 	// across multiple AZs behind a load balancer instead of a single EC2 with
 	// an Elastic IP. Survives instance + AZ failure. Adds ~$60/month of

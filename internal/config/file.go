@@ -6,7 +6,18 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+// DefaultPostgresVolumeSize is applied when bonsai.yaml leaves
+// postgres.volume_size unset. Picked low so cost-conscious dev/staging
+// clusters don't pre-allocate disk they won't use; bump per cluster as needed.
+const DefaultPostgresVolumeSize = "10Gi"
+
+// minPostgresVolumeSize is the floor we accept at load time. 1Gi is below
+// every cloud provider's volume minimum (Hetzner is 10G, AWS gp3 is 1G), but
+// even local-path on libvirt would struggle below this with WAL + base data.
+var minPostgresVolumeSize = resource.MustParse("1Gi")
 
 // fileConfig is the on-disk schema of bonsai.yaml. Lives next to the app
 // source (committable) or under BONSAI_DATA_DIR/<name>-<env>/config.yaml
@@ -26,7 +37,8 @@ type fileConfig struct {
 	WorkerServerType  string `yaml:"worker_server_type"`
 
 	Postgres struct {
-		Instances int `yaml:"instances"`
+		Instances  int    `yaml:"instances"`
+		VolumeSize string `yaml:"volume_size"`
 	} `yaml:"postgres"`
 
 	Tailnet struct {
@@ -68,13 +80,17 @@ func Load(path string) (ClusterConfig, error) {
 		Locations:         fc.Locations,
 		ControlServerType: fc.ControlServerType,
 		WorkerServerType:  fc.WorkerServerType,
-		PostgresInstances: fc.Postgres.Instances,
+		PostgresInstances:  fc.Postgres.Instances,
+		PostgresVolumeSize: fc.Postgres.VolumeSize,
 		TailnetTag:        fc.Tailnet.Tag,
 	}
 	if fc.Tailnet.Enabled {
 		cc.TailnetURL = fc.Tailnet.LoginServer
 		cc.TailnetKeyFile = fc.Tailnet.AuthKeyFile
 		cc.TailnetKeySSMPath = fc.Tailnet.AuthKeySSM
+	}
+	if cc.PostgresVolumeSize == "" {
+		cc.PostgresVolumeSize = DefaultPostgresVolumeSize
 	}
 
 	if err := Validate(cc); err != nil {
@@ -89,6 +105,15 @@ func Load(path string) (ClusterConfig, error) {
 func Validate(cc ClusterConfig) error {
 	if cc.Name == "" {
 		return fmt.Errorf("name: required")
+	}
+	if cc.PostgresVolumeSize != "" {
+		q, err := resource.ParseQuantity(cc.PostgresVolumeSize)
+		if err != nil {
+			return fmt.Errorf("postgres.volume_size %q: not a valid Kubernetes quantity (e.g. 10Gi, 200Gi): %w", cc.PostgresVolumeSize, err)
+		}
+		if q.Cmp(minPostgresVolumeSize) < 0 {
+			return fmt.Errorf("postgres.volume_size %q: must be at least %s", cc.PostgresVolumeSize, minPostgresVolumeSize.String())
+		}
 	}
 	switch cc.Provider {
 	case "aws", "hetzner", "libvirt":

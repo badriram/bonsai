@@ -165,11 +165,12 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	}
 
 	out, err := cluster.Bootstrap(ctx, cluster.Config{
-		Kubeconfig:   []byte(kubeconfig),
-		Name:         cfg.Name,
-		Env:          cfg.Env,
-		BackupBucket: backupBucket,
-		BackupRegion: p.awsCfg.Region,
+		Kubeconfig:         []byte(kubeconfig),
+		Name:               cfg.Name,
+		Env:                cfg.Env,
+		BackupBucket:       backupBucket,
+		BackupRegion:       p.awsCfg.Region,
+		PostgresVolumeSize: cfg.PostgresVolumeSize,
 	})
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("in-cluster bootstrap: %w", err)

@@ -37,9 +37,8 @@ const (
 	defaultImageURL    = "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-uefi-cloudinit-r0.qcow2"
 	defaultImageSHA256 = "" // empty = trust HTTPS for V1; fill in once we pin a version
 	defaultNetwork     = "default"
-	defaultMemoryMB    = 2048
-	defaultVCPUs       = 2
-	defaultDiskGB      = 10
+	defaultMemoryMB = 2048
+	defaultVCPUs    = 2
 
 	sshReadyTimeout = 5 * time.Minute
 	k3sReadyTimeout = 10 * time.Minute
@@ -150,9 +149,10 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 
 	progress.Step("running in-cluster bootstrap (helm: cnpg, valkey, kured, suc)")
 	out, err := cluster.Bootstrap(ctx, cluster.Config{
-		Kubeconfig: []byte(kubeconfig),
-		Name:       cfg.Name,
-		Env:        cfg.Env,
+		Kubeconfig:         []byte(kubeconfig),
+		Name:               cfg.Name,
+		Env:                cfg.Env,
+		PostgresVolumeSize: cfg.PostgresVolumeSize,
 	})
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("in-cluster bootstrap: %w", err)

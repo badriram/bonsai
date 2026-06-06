@@ -164,9 +164,10 @@ func (p *Provider) provisionHA(ctx context.Context, cfg bcfg.ClusterConfig) (pro
 
 	progress.Step("running in-cluster bootstrap (helm: cnpg, valkey, kured, suc)")
 	out, err := cluster.Bootstrap(ctx, cluster.Config{
-		Kubeconfig: []byte(kubeconfig),
-		Name:       cfg.Name,
-		Env:        cfg.Env,
+		Kubeconfig:         []byte(kubeconfig),
+		Name:               cfg.Name,
+		Env:                cfg.Env,
+		PostgresVolumeSize: cfg.PostgresVolumeSize,
 	})
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("in-cluster bootstrap: %w", err)

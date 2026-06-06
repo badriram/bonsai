@@ -9,6 +9,7 @@ import (
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	bcfg "github.com/badriram/bonsai/internal/config"
 	"github.com/badriram/bonsai/internal/state"
@@ -223,7 +224,36 @@ func diffDeclaredVsDesired(was, want bcfg.ClusterConfig) []change {
 	if was.TailnetMode() != want.TailnetMode() {
 		out = append(out, change{kind: "REPLACE", resource: "tailnet_mode", msg: fmt.Sprintf("toggle %v → %v (architecture change — destroy + grow required)", was.TailnetMode(), want.TailnetMode())})
 	}
+	if c := diffPostgresVolumeSize(was, want); c != nil {
+		out = append(out, *c)
+	}
 	return out
+}
+
+// diffPostgresVolumeSize reads as: shrinks are never applied (CSI rejects;
+// data-loss risk), grows are online on AWS/Hetzner via CSI volume expansion,
+// and libvirt's qcow2 ceiling is fixed at first grow so any change there
+// requires destroy+grow.
+func diffPostgresVolumeSize(was, want bcfg.ClusterConfig) *change {
+	if want.PostgresVolumeSize == "" || was.PostgresVolumeSize == "" {
+		return nil
+	}
+	if was.PostgresVolumeSize == want.PostgresVolumeSize {
+		return nil
+	}
+	wantQ, err1 := resource.ParseQuantity(want.PostgresVolumeSize)
+	wasQ, err2 := resource.ParseQuantity(was.PostgresVolumeSize)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	cmp := wantQ.Cmp(wasQ)
+	if cmp < 0 {
+		return &change{kind: "WARN", resource: "postgres.volume_size", msg: fmt.Sprintf("%s → %s ignored — Bonsai never shrinks Postgres storage; existing %s kept", was.PostgresVolumeSize, want.PostgresVolumeSize, was.PostgresVolumeSize)}
+	}
+	if want.Provider == "libvirt" {
+		return &change{kind: "WARN", resource: "postgres.volume_size", msg: fmt.Sprintf("%s → %s requires destroy + grow on libvirt — qcow2 ceiling is fixed at provision time", was.PostgresVolumeSize, want.PostgresVolumeSize)}
+	}
+	return &change{kind: "UPDATE", resource: "postgres.volume_size", msg: fmt.Sprintf("%s → %s (online PVC expansion — primary stays up)", was.PostgresVolumeSize, want.PostgresVolumeSize)}
 }
 
 func printPlan(cfg bcfg.ClusterConfig, st *state.State, changes []change) {

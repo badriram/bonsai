@@ -78,6 +78,7 @@ locations: [nbg1, fsn1, hel1]
 k3s_version: v1.31.0+k3s1
 postgres:
   instances: 2
+  volume_size: 10Gi      # per-instance PVC; bump for online resize on AWS/Hetzner
 tailnet:
   enabled: true
   login_server: https://controlplane.tailscale.com
@@ -153,7 +154,7 @@ Cluster outputs:
 | | Description |
 |---|---|
 | **Compute** | k3s 1.31 on Graviton (`t4g.small`) by default on AWS; Ubuntu 24.04 on Hetzner (`cpx22`, x86 AMD — `cax11` arm stock is too thin to default to) |
-| **Postgres** | CloudNativePG operator + a Postgres cluster you can connect to (S3-backed WAL on AWS) |
+| **Postgres** | CloudNativePG operator + a Postgres cluster you can connect to (S3-backed WAL on AWS). Per-instance PVC size set by `postgres.volume_size`; default 10Gi. Online expansion on AWS/Hetzner — bump the value and re-run `bonsai grow`. Libvirt is provisioned-upfront (qcow2 thin) and pinned at first grow; `bonsai plan` will WARN you. Shrinks are never applied. |
 | **KV** | Valkey single-pod, in-cluster |
 | **Cert mgmt** | cert-manager (cluster-issuer setup is yours) |
 | **Reboots** | kured (rolling reboots on package updates) |

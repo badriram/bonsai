@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/badriram/bonsai/internal/cluster"
@@ -122,18 +123,51 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		return provider.PlatformOutputs{}, err
 	}
 
+	// In tailnet mode the auth cred (OAuth client secret or pre-auth key) is
+	// baked into the first-boot script so each node can `tailscale up` and
+	// join the operator's tailnet before k3s starts. File-based only on
+	// libvirt — there's no managed parameter store.
+	var tailnetCred string
+	if cfg.TailnetMode() {
+		raw, err := os.ReadFile(cfg.TailnetKeyFile)
+		if err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("read tailnet auth_key_file %s: %w", cfg.TailnetKeyFile, err)
+		}
+		tailnetCred = strings.TrimSpace(string(raw))
+		if tailnetCred == "" {
+			return provider.PlatformOutputs{}, fmt.Errorf("tailnet auth_key_file %s is empty", cfg.TailnetKeyFile)
+		}
+	}
+
 	progress.Step("provisioning control plane VM")
-	control, controlIP, err := p.createControlVM(ctx, cfg, baseImage, sshKey)
+	control, vmIP, err := p.createControlVM(ctx, cfg, baseImage, tailnetCred, sshKey)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("control VM: %w", err)
 	}
-	progress.Step("control VM ready at %s — waiting for k3s", controlIP)
+	progress.Step("control VM ready at %s — waiting for k3s", vmIP)
 
-	if err := p.waitForReady(ctx, controlIP, sshKey, k3sReadyTimeout); err != nil {
+	if err := p.waitForReady(ctx, vmIP, sshKey, k3sReadyTimeout); err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("waitForReady: %w", err)
 	}
 
-	token, kubeconfig, err := p.retrieveControlState(ctx, controlIP, sshKey)
+	// In tailnet mode, switch all cluster-API addressing to the control
+	// plane's tailnet IP. The VM wrote it to /var/lib/bonsai-tailnet-ip
+	// after `tailscale up`. We need this BEFORE retrieveControlState so
+	// the kubeconfig rewrite uses the right address.
+	controlIP := vmIP
+	if cfg.TailnetMode() {
+		out, err := p.runRemoteCmd(ctx, vmIP, sshKey, "cat /var/lib/bonsai-tailnet-ip")
+		if err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("read tailnet IP from %s: %w", vmIP, err)
+		}
+		controlIP = strings.TrimSpace(out)
+		if controlIP == "" {
+			return provider.PlatformOutputs{}, fmt.Errorf("VM reported empty tailnet IP")
+		}
+		progress.Step("control plane joined tailnet at %s", controlIP)
+	}
+
+	token, kubeconfig, err := p.retrieveControlState(ctx, vmIP, sshKey, controlIP)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("retrieve control state: %w", err)
 	}
@@ -153,20 +187,22 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 		workerCount = 1
 	}
 	progress.Step("provisioning %d worker VM(s)", workerCount)
-	if err := p.ensureWorkers(ctx, cfg, baseImage, sshKey, controlIP, token, workerCount); err != nil {
+	if err := p.ensureWorkers(ctx, cfg, baseImage, tailnetCred, sshKey, controlIP, token, workerCount); err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("workers: %w", err)
 	}
 
 	progress.Step("running in-cluster bootstrap (helm: cnpg, valkey, kured, suc)")
 	bootstrapKubeconfig := kubeconfig
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == "darwin" && !cfg.TailnetMode() {
 		// macOS's kernel rejects connect() from non-Apple-signed binaries to
 		// vmnet-bridged guest IPs. Bonsai's embedded helm + client-go would
 		// fail dialing the k3s API at the guest IP. Open a loopback tunnel
 		// (Apple-signed ssh sets it up; loopback connects are unrestricted)
 		// and rewrite the bootstrap-time kubeconfig to point at it. The
 		// kubeconfig saved to BONSAI_DATA_DIR keeps the guest IP unchanged.
-		cleanup, tunneledKC, err := tunnelKubeconfigDarwin(ctx, controlIP, sshKey, kubeconfig)
+		// Tailnet mode skips this — the tailnet IP routes through utun, which
+		// is unrestricted, so Go's net.Dial works directly.
+		cleanup, tunneledKC, err := tunnelKubeconfigDarwin(ctx, vmIP, sshKey, kubeconfig)
 		if err != nil {
 			return provider.PlatformOutputs{}, fmt.Errorf("bootstrap tunnel: %w", err)
 		}

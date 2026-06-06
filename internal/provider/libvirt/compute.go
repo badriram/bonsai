@@ -143,10 +143,9 @@ type graphics struct {
 
 // createControlVM provisions a single-node control plane. Returns the
 // domain UUID and the discovered IP.
-func (p *Provider) createControlVM(ctx context.Context, cfg bcfg.ClusterConfig, baseImage string, key *sshKeyPair) (string, string, error) {
+func (p *Provider) createControlVM(ctx context.Context, cfg bcfg.ClusterConfig, baseImage, tailnetCred string, key *sshKeyPair) (string, string, error) {
 	name := fmt.Sprintf("bonsai-%s-%s-control", cfg.Name, cfg.Env)
-
-	script, err := renderServerScript(serverVars{K3sVersion: k3sVersionOrDefault(cfg.K3sVersion)})
+	script, err := renderControlScript(cfg, tailnetCred)
 	if err != nil {
 		return "", "", err
 	}
@@ -157,15 +156,26 @@ func (p *Provider) createControlVM(ctx context.Context, cfg bcfg.ClusterConfig, 
 	return uuid, ip, nil
 }
 
+func renderControlScript(cfg bcfg.ClusterConfig, tailnetCred string) (string, error) {
+	if cfg.TailnetMode() {
+		return renderServerTailnetScript(serverTailnetVars{
+			K3sVersion:      k3sVersionOrDefault(cfg.K3sVersion),
+			Name:            cfg.Name,
+			Env:             cfg.Env,
+			TailnetURL:      cfg.TailnetURL,
+			TailnetTag:      cfg.TailnetTag,
+			TailnetAuthCred: tailnetCred,
+		})
+	}
+	return renderServerScript(serverVars{K3sVersion: k3sVersionOrDefault(cfg.K3sVersion)})
+}
+
 // ensureWorkers creates worker VMs up to `desired`. Workers join via the
 // control plane's IP (controlIP) and use the join token Bonsai pulled.
-func (p *Provider) ensureWorkers(ctx context.Context, cfg bcfg.ClusterConfig, baseImage string, key *sshKeyPair, controlIP, token string, desired int) error {
+// In tailnet mode controlIP is the control plane's 100.x.x.x address.
+func (p *Provider) ensureWorkers(ctx context.Context, cfg bcfg.ClusterConfig, baseImage, tailnetCred string, key *sshKeyPair, controlIP, token string, desired int) error {
 	for i := 0; i < desired; i++ {
-		script, err := renderWorkerScript(workerVars{
-			K3sVersion: k3sVersionOrDefault(cfg.K3sVersion),
-			ControlIP:  controlIP,
-			Token:      token,
-		})
+		script, err := renderWorkerScriptForCfg(cfg, tailnetCred, controlIP, token, i+1)
 		if err != nil {
 			return err
 		}
@@ -175,6 +185,27 @@ func (p *Provider) ensureWorkers(ctx context.Context, cfg bcfg.ClusterConfig, ba
 		}
 	}
 	return nil
+}
+
+func renderWorkerScriptForCfg(cfg bcfg.ClusterConfig, tailnetCred, controlIP, token string, nodeIndex int) (string, error) {
+	if cfg.TailnetMode() {
+		return renderWorkerTailnetScript(workerTailnetVars{
+			K3sVersion:       k3sVersionOrDefault(cfg.K3sVersion),
+			Name:             cfg.Name,
+			Env:              cfg.Env,
+			NodeIndex:        nodeIndex,
+			ControlTailnetIP: controlIP,
+			Token:            token,
+			TailnetURL:       cfg.TailnetURL,
+			TailnetTag:       cfg.TailnetTag,
+			TailnetAuthCred:  tailnetCred,
+		})
+	}
+	return renderWorkerScript(workerVars{
+		K3sVersion: k3sVersionOrDefault(cfg.K3sVersion),
+		ControlIP:  controlIP,
+		Token:      token,
+	})
 }
 
 // createVM is the shared body for control + worker VM creation: overlay

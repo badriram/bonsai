@@ -52,17 +52,59 @@ sudo brew services restart libvirt
 ```
 
 macOS's `if_bridge` doesn't support the Linux-bridge rename libvirt's
-`default` network needs, so Bonsai uses `<interface type='user'><source
-mode='shared'/>` instead — qemu's vmnet-shared backend, giving each VM a
-DHCP-leased 192.168.64.x address. No `virsh net-start default` needed.
+`default` network needs, so on darwin Bonsai injects the NIC via
+`<qemu:commandline>` with `-netdev vmnet-shared` — qemu attaches directly
+to Apple's `vmnet` framework. VMs get DHCP-leased 192.168.x.x addresses
+on a NAT'd shared subnet. On Linux the standard `default` Linux-bridge
+NAT network is used; `bonsai grow --provider libvirt` will refuse to
+start if it isn't active and prints the exact `virsh net-start` command.
 
-`bonsai grow --provider libvirt` will refuse to start if the `default`
-network isn't active and prints the exact `virsh net-start` command to run.
+Apple Silicon hosts auto-pick the aarch64 Alpine cloud image and `hvf`
+domain acceleration. Override either with `BONSAI_LIBVIRT_IMAGE_URL` /
+`BONSAI_LIBVIRT_DOMAIN_TYPE`.
 
-Apple Silicon hosts auto-pick the aarch64 Alpine cloud image. Override the
-arch image with `BONSAI_LIBVIRT_IMAGE_URL` for bake-image outputs. macOS
-hosts also default the domain accelerator to `qemu` (TCG) — set
-`BONSAI_LIBVIRT_DOMAIN_TYPE=hvf` on libvirt >= 7.10 to get HVF acceleration.
+**Apple-signed binary requirement.** macOS rejects `connect()` syscalls
+from non-Apple-signed processes (Bonsai is `Signature=adhoc`) to
+vmnet-bridged guest IPs. Bonsai handles this transparently — reachability
+probes shell out to `/usr/bin/nc`, remote commands to `/usr/bin/ssh`, and
+the in-cluster bootstrap step runs through an SSH loopback tunnel
+(`ssh -L 127.0.0.1:<random>:127.0.0.1:6443`). The persistent kubeconfig
+saved to `BONSAI_DATA_DIR` still points at the guest IP, so you'll need
+`sudo kubectl` or your own `ssh -L` to use it from the host — or use
+tailnet mode (below) which sidesteps the policy entirely.
+
+### Tailnet mode on libvirt (recommended on macOS)
+
+When `tailnet.enabled: true`, the VM joins your tailnet on first boot and
+the cluster API binds to the tailnet IP. Operators on the same tailnet
+reach `kubectl` directly through `utun` (Apple-signed `tailscaled` owns
+it, no vmnet policy involved), so no SSH tunnel is needed for the
+bootstrap step or for ad-hoc kubectl from the host.
+
+One-time setup:
+
+1. In the Tailscale admin UI, define a device tag (e.g. `tag:bonsai`) and
+   an OAuth client scoped to `auth_keys:write` + that tag.
+2. Save the `tskey-client-*` secret to a local file (`chmod 0600`):
+
+   ```sh
+   echo 'tskey-client-...' > ~/.bonsai/_secrets/tailnet-key
+   chmod 600 ~/.bonsai/_secrets/tailnet-key
+   ```
+3. Run `tailscale up` on your Mac (same login server, same tailnet).
+4. Add to `bonsai.yaml`:
+
+   ```yaml
+   tailnet:
+     enabled: true
+     login_server: https://controlplane.tailscale.com
+     tag: tag:bonsai
+     auth_key_file: ~/.bonsai/_secrets/tailnet-key
+   ```
+
+Then `bonsai grow --provider libvirt --name <name> --env <env>` Just
+Works on macOS — no sudo for kubectl, no manual tunnels. Self-hosted
+headscale works too; point `login_server:` at your headscale URL.
 
 Build a fresh binary first:
 

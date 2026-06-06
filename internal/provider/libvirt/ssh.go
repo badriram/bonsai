@@ -222,17 +222,21 @@ func (p *Provider) waitForReady(ctx context.Context, ip string, key *sshKeyPair,
 	return fmt.Errorf("VM %s never reached ready marker within %s (last error: %v)", ip, timeout, lastErr)
 }
 
-// retrieveControlState pulls the k3s join token + kubeconfig over SSH. The
-// kubeconfig's 127.0.0.1 is rewritten to the VM's reachable IP.
-func (p *Provider) retrieveControlState(ctx context.Context, ip string, key *sshKeyPair) (token, kubeconfig string, err error) {
-	tok, err := p.runRemoteCmd(ctx, ip, key, "doas cat /var/lib/rancher/k3s/server/node-token")
+// retrieveControlState pulls the k3s join token + kubeconfig over SSH.
+// sshIP is the host bonsai dials over (vmnet IP); apiIP is what k3s
+// clients use to reach the API (same as sshIP for non-tailnet, the
+// tailnet 100.x.x.x address otherwise). Only the kubeconfig's embedded
+// 127.0.0.1 is rewritten — the rest of the rewrites happen at endpoint
+// publishing time.
+func (p *Provider) retrieveControlState(ctx context.Context, sshIP string, key *sshKeyPair, apiIP string) (token, kubeconfig string, err error) {
+	tok, err := p.runRemoteCmd(ctx, sshIP, key, "doas cat /var/lib/rancher/k3s/server/node-token")
 	if err != nil {
 		return "", "", fmt.Errorf("read token: %w", err)
 	}
-	kc, err := p.runRemoteCmd(ctx, ip, key, "doas cat /etc/rancher/k3s/k3s.yaml")
+	kc, err := p.runRemoteCmd(ctx, sshIP, key, "doas cat /etc/rancher/k3s/k3s.yaml")
 	if err != nil {
 		return "", "", fmt.Errorf("read kubeconfig: %w", err)
 	}
-	kc = strings.ReplaceAll(kc, "127.0.0.1", ip)
+	kc = strings.ReplaceAll(kc, "127.0.0.1", apiIP)
 	return strings.TrimSpace(tok), kc, nil
 }

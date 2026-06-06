@@ -20,8 +20,35 @@ type workerVars struct {
 	Token      string
 }
 
+type serverTailnetVars struct {
+	K3sVersion      string
+	Name            string
+	Env             string
+	TailnetURL      string
+	TailnetTag      string
+	TailnetAuthCred string
+}
+
+type workerTailnetVars struct {
+	K3sVersion       string
+	Name             string
+	Env              string
+	NodeIndex        int
+	ControlTailnetIP string
+	Token            string
+	TailnetURL       string
+	TailnetTag       string
+	TailnetAuthCred  string
+}
+
 func renderServerScript(v serverVars) (string, error) { return render("userdata/server.sh.tmpl", v) }
 func renderWorkerScript(v workerVars) (string, error) { return render("userdata/worker.sh.tmpl", v) }
+func renderServerTailnetScript(v serverTailnetVars) (string, error) {
+	return render("userdata/server-tailnet.sh.tmpl", v)
+}
+func renderWorkerTailnetScript(v workerTailnetVars) (string, error) {
+	return render("userdata/worker-tailnet.sh.tmpl", v)
+}
 
 func render(path string, v any) (string, error) {
 	raw, err := userdataFS.ReadFile(path)

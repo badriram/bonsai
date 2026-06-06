@@ -1,0 +1,55 @@
+#!/bin/sh
+# Bonsai libvirt worker first-boot — tailnet mode.
+set -eu
+
+apk add --no-cache curl openssh tailscale
+
+rc-update add cgroups sysinit
+rc-service cgroups start || true
+
+rc-update add tailscale default
+rc-service tailscale start
+for attempt in 1 2 3 4 5; do
+  tailscale status >/dev/null 2>&1 && break
+  sleep 2
+done
+
+TAILNET_CRED='{{.TailnetAuthCred}}'
+case "$TAILNET_CRED" in
+  tskey-client-*)
+    TAILNET_AUTHKEY="${TAILNET_CRED}?ephemeral=true&preauthorized=true"
+    TAILNET_TAG_FLAGS="--advertise-tags={{.TailnetTag}}"
+    ;;
+  *)
+    TAILNET_AUTHKEY="$TAILNET_CRED"
+    TAILNET_TAG_FLAGS=""
+    ;;
+esac
+tailscale up \
+  --authkey="$TAILNET_AUTHKEY" \
+  --login-server="{{.TailnetURL}}" \
+  --hostname="bonsai-{{.Name}}-{{.Env}}-worker-{{.NodeIndex}}" \
+  $TAILNET_TAG_FLAGS \
+  --accept-routes
+
+TAILNET_IP="$(tailscale ip -4 | head -1)"
+if [ -z "$TAILNET_IP" ]; then
+  echo "bonsai: tailscale did not return an IPv4 address" >&2
+  exit 1
+fi
+
+for attempt in 1 2 3 4 5; do
+  curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+    K3S_URL="https://{{.ControlTailnetIP}}:6443" \
+    K3S_TOKEN="{{.Token}}" \
+    INSTALL_K3S_EXEC="agent --node-ip=$TAILNET_IP --flannel-iface=tailscale0" \
+    INSTALL_K3S_SYMLINK="force" \
+    sh - && break
+  echo "bonsai: k3s install attempt $attempt failed; retrying in $((attempt*5))s" >&2
+  sleep $((attempt * 5))
+done
+rc-service k3s-agent status >/dev/null 2>&1 || rc-service k3s-agent start
+rc-update add k3s-agent default
+
+touch /var/lib/bonsai-worker-ready

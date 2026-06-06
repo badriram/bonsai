@@ -57,7 +57,7 @@ tailnet:
   tag: tag:bonsai                                      # must exist in tailnet ACL
 
   # EXACTLY ONE of:
-  # auth_key_file: ~/.bonsai/_secrets/tailnet-key      # Hetzner: local file path
+  # auth_key_file: ~/.bonsai/_secrets/tailnet-key      # Hetzner / libvirt: local file path
   # auth_key_ssm: /myorg/bonsai/tailnet-key            # AWS: SSM parameter path
   #
   # Both accept either tskey-client-* (OAuth client secret, recommended —

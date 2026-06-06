@@ -1,0 +1,73 @@
+#!/bin/sh
+# Bonsai libvirt control plane first-boot — tailnet mode.
+#
+# Node joins the operator's tailnet on boot, then k3s binds to tailscale0
+# instead of the vmnet/bridge interface. The operator's machine, on the
+# same tailnet, reaches the API via utun. On macOS this also sidesteps
+# the kernel's vmnet-bridge connect() restriction — utun is unrestricted.
+set -eu
+
+apk add --no-cache curl openssh tailscale
+
+sed -i 's/^AllowTcpForwarding no/AllowTcpForwarding yes/' /etc/ssh/sshd_config
+rc-service sshd reload || rc-service sshd restart
+
+rc-update add cgroups sysinit
+rc-service cgroups start || true
+
+rc-update add tailscale default
+rc-service tailscale start
+for attempt in 1 2 3 4 5; do
+  tailscale status >/dev/null 2>&1 && break
+  sleep 2
+done
+
+TAILNET_CRED='{{.TailnetAuthCred}}'
+case "$TAILNET_CRED" in
+  tskey-client-*)
+    TAILNET_AUTHKEY="${TAILNET_CRED}?ephemeral=true&preauthorized=true"
+    TAILNET_TAG_FLAGS="--advertise-tags={{.TailnetTag}}"
+    ;;
+  *)
+    TAILNET_AUTHKEY="$TAILNET_CRED"
+    TAILNET_TAG_FLAGS=""
+    ;;
+esac
+tailscale up \
+  --authkey="$TAILNET_AUTHKEY" \
+  --login-server="{{.TailnetURL}}" \
+  --hostname="bonsai-{{.Name}}-{{.Env}}-control" \
+  $TAILNET_TAG_FLAGS \
+  --accept-routes
+
+TAILNET_IP="$(tailscale ip -4 | head -1)"
+if [ -z "$TAILNET_IP" ]; then
+  echo "bonsai: tailscale did not return an IPv4 address" >&2
+  exit 1
+fi
+echo "$TAILNET_IP" > /var/lib/bonsai-tailnet-ip
+
+mkdir -p /etc/rancher/k3s
+cat > /etc/rancher/k3s/config.yaml <<EOF
+write-kubeconfig-mode: "0644"
+node-ip: "$TAILNET_IP"
+advertise-address: "$TAILNET_IP"
+tls-san:
+  - "$TAILNET_IP"
+flannel-iface: tailscale0
+disable:
+  - traefik
+EOF
+
+for attempt in 1 2 3 4 5; do
+  curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_VERSION="{{.K3sVersion}}" \
+    INSTALL_K3S_SYMLINK="force" \
+    sh - && break
+  echo "bonsai: k3s install attempt $attempt failed; retrying in $((attempt*5))s" >&2
+  sleep $((attempt * 5))
+done
+rc-service k3s status >/dev/null 2>&1 || rc-service k3s start
+rc-update add k3s default
+
+touch /var/lib/bonsai-server-ready

@@ -53,4 +53,15 @@ done
 rc-service k3s status >/dev/null 2>&1 || rc-service k3s start
 rc-update add k3s default
 
+# rc-service returns immediately after supervise-daemon hands off; k3s
+# itself takes another few seconds to bootstrap the node-token and write
+# kubeconfig. Wait for both files before declaring ready so the host's
+# retrieveControlState doesn't race a half-initialised server.
+for attempt in $(seq 1 60); do
+  if [ -f /var/lib/rancher/k3s/server/node-token ] && [ -f /etc/rancher/k3s/k3s.yaml ]; then
+    break
+  fi
+  sleep 2
+done
+
 touch /var/lib/bonsai-server-ready

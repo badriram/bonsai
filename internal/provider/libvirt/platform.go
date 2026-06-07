@@ -3,6 +3,7 @@ package libvirt
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -257,6 +258,101 @@ func canonicalMAC(s string) string {
 		out = append(out, strings.TrimLeft(b, "0"))
 	}
 	return strings.Join(out, ":")
+}
+
+// lookupTailnetIP asks the host's tailscaled for the IP it assigned to
+// `hostname`. Polls until an ONLINE device with that hostname (or a
+// dedup-suffixed variant like "<hostname>-1") shows up. macOS CLI lives
+// inside the GUI app bundle; on Linux it's on PATH. Either way the
+// process is system-installed and bypasses the vmnet kernel policy.
+func lookupTailnetIP(ctx context.Context, hostname string, timeout time.Duration) (string, error) {
+	bin := tailscaleBinary()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := exec.CommandContext(ctx, bin, "status", "--json").Output()
+		if err == nil {
+			if ip := pickTailnetIP(out, hostname); ip != "" {
+				return ip, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return "", fmt.Errorf("host's tailscale never saw an online device named %q within %s — check `tailscale status` and prune stale records via https://login.tailscale.com/admin/machines", hostname, timeout)
+}
+
+func tailscaleBinary() string {
+	if runtime.GOOS == "darwin" {
+		const appCLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+		if _, err := os.Stat(appCLI); err == nil {
+			return appCLI
+		}
+	}
+	return "tailscale"
+}
+
+// pickTailnetIP returns the tailnet IP for the most-relevant device whose
+// HostName matches `want` or `<want>-N` (tailscale's dedup suffix when an
+// older registration with the same name is still around). Prefers Online
+// devices; falls back to the most recently seen offline match only if no
+// online candidate exists.
+func pickTailnetIP(statusJSON []byte, want string) string {
+	var s struct {
+		Peer map[string]struct {
+			HostName     string   `json:"HostName"`
+			TailscaleIPs []string `json:"TailscaleIPs"`
+			Online       bool     `json:"Online"`
+			LastSeen     string   `json:"LastSeen"`
+		} `json:"Peer"`
+	}
+	if err := json.Unmarshal(statusJSON, &s); err != nil {
+		return ""
+	}
+	var (
+		onlineIP  string
+		offlineIP string
+		offlineAt string
+	)
+	for _, p := range s.Peer {
+		if !hostnameMatches(p.HostName, want) || len(p.TailscaleIPs) == 0 {
+			continue
+		}
+		ip := p.TailscaleIPs[0]
+		if p.Online {
+			onlineIP = ip
+			break
+		}
+		if p.LastSeen > offlineAt {
+			offlineAt = p.LastSeen
+			offlineIP = ip
+		}
+	}
+	if onlineIP != "" {
+		return onlineIP
+	}
+	return offlineIP
+}
+
+// hostnameMatches accepts the bare hostname OR its dedup-suffixed variant
+// ("<want>-N" where N is 1..). Tailscale appends -N when an older
+// registration with the same name is still around.
+func hostnameMatches(got, want string) bool {
+	if got == want {
+		return true
+	}
+	if !strings.HasPrefix(got, want+"-") {
+		return false
+	}
+	suffix := got[len(want)+1:]
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return suffix != ""
 }
 
 // ensureDefaultNetworkActive is the load-bearing preflight for system-mode

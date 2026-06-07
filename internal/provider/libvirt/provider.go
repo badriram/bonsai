@@ -144,30 +144,34 @@ func (p *Provider) Provision(ctx context.Context, cfg bcfg.ClusterConfig) (provi
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("control VM: %w", err)
 	}
-	progress.Step("control VM ready at %s — waiting for k3s", vmIP)
 
-	if err := p.waitForReady(ctx, vmIP, sshKey, k3sReadyTimeout); err != nil {
+	// In tailnet mode, the VM is reachable on the vmnet IP only briefly —
+	// once `tailscale up --accept-routes` runs and the VM's default route
+	// flips to tailscale0, replies from the guest stop coming back through
+	// the vmnet bridge. SSH (and everything else) needs to happen on the
+	// tailnet IP from the start. We discover it from the host's tailscaled
+	// rather than trying to race the VM's routing transition.
+	sshIP := vmIP
+	controlIP := vmIP
+	if cfg.TailnetMode() {
+		hostname := fmt.Sprintf("bonsai-%s-%s-control", cfg.Name, cfg.Env)
+		progress.Step("waiting for %s to register with the operator's tailnet", hostname)
+		tip, err := lookupTailnetIP(ctx, hostname, k3sReadyTimeout)
+		if err != nil {
+			return provider.PlatformOutputs{}, fmt.Errorf("tailnet discovery: %w", err)
+		}
+		progress.Step("control VM joined tailnet at %s — waiting for k3s", tip)
+		sshIP = tip
+		controlIP = tip
+	} else {
+		progress.Step("control VM ready at %s — waiting for k3s", vmIP)
+	}
+
+	if err := p.waitForReady(ctx, sshIP, sshKey, k3sReadyTimeout); err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("waitForReady: %w", err)
 	}
 
-	// In tailnet mode, switch all cluster-API addressing to the control
-	// plane's tailnet IP. The VM wrote it to /var/lib/bonsai-tailnet-ip
-	// after `tailscale up`. We need this BEFORE retrieveControlState so
-	// the kubeconfig rewrite uses the right address.
-	controlIP := vmIP
-	if cfg.TailnetMode() {
-		out, err := p.runRemoteCmd(ctx, vmIP, sshKey, "cat /var/lib/bonsai-tailnet-ip")
-		if err != nil {
-			return provider.PlatformOutputs{}, fmt.Errorf("read tailnet IP from %s: %w", vmIP, err)
-		}
-		controlIP = strings.TrimSpace(out)
-		if controlIP == "" {
-			return provider.PlatformOutputs{}, fmt.Errorf("VM reported empty tailnet IP")
-		}
-		progress.Step("control plane joined tailnet at %s", controlIP)
-	}
-
-	token, kubeconfig, err := p.retrieveControlState(ctx, vmIP, sshKey, controlIP)
+	token, kubeconfig, err := p.retrieveControlState(ctx, sshIP, sshKey, controlIP)
 	if err != nil {
 		return provider.PlatformOutputs{}, fmt.Errorf("retrieve control state: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/badriram/bonsai/internal/provider"
 	"github.com/badriram/bonsai/internal/state"
+	"github.com/badriram/bonsai/internal/tailnet"
 )
 
 // Destroy tears down every libvirt resource Bonsai created for the cluster,
@@ -70,7 +71,7 @@ func (p *Provider) pruneTailnetIfConfigured(ctx context.Context, name, env, host
 		fmt.Fprintf(os.Stderr, "warning: cluster was in tailnet mode but tailnet.api_token_file is unset — prune devices manually at https://login.tailscale.com/admin/machines\n")
 		return
 	}
-	deleted, err := pruneTailnetDevices(ctx, tokenFile, hostnamePrefix)
+	deleted, err := tailnet.PruneFromFile(ctx, tokenFile, hostnamePrefix)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: tailnet device prune failed: %v\n", err)
 		return

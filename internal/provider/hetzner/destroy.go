@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
+
+	"github.com/badriram/bonsai/internal/state"
+	"github.com/badriram/bonsai/internal/tailnet"
 )
 
 // Destroy removes every Bonsai-managed Hetzner resource for the cluster and
@@ -23,6 +26,11 @@ import (
 //   6. SSH key
 //   7. Local secret directory
 func (p *Provider) Destroy(ctx context.Context, name, env string) error {
+	// Prune tailnet device records up front so destroy fails fast on
+	// credential issues — before any Hetzner-side destructive call. Best-
+	// effort: surface as a warning, never block destroy.
+	p.pruneTailnetIfConfigured(ctx, name, env)
+
 	if err := p.destroyLoadBalancer(ctx, name, env); err != nil {
 		return fmt.Errorf("destroy LB: %w", err)
 	}
@@ -109,4 +117,33 @@ func (p *Provider) Destroy(ctx context.Context, name, env string) error {
 
 func isNotFound(err error) bool {
 	return err != nil && hcloud.IsError(err, hcloud.ErrorCodeNotFound)
+}
+
+// pruneTailnetIfConfigured deletes the cluster's tailnet device records via
+// the Tailscale management API, gated on state.json declaring the cluster
+// was tailnet-mode AND the operator having supplied an api_token_file in
+// bonsai.yaml. All errors print a warning and continue — never fail
+// destroy because of a tailnet hiccup.
+func (p *Provider) pruneTailnetIfConfigured(ctx context.Context, name, env string) {
+	st, err := state.Read(state.Path(p.dataDir, name, env))
+	if err != nil || st == nil {
+		return
+	}
+	if !st.Declared.TailnetMode() {
+		return
+	}
+	tokenFile := st.Declared.TailnetAPITokenFile
+	if tokenFile == "" {
+		fmt.Fprintf(os.Stderr, "warning: cluster was in tailnet mode but tailnet.api_token_file is unset — prune devices manually at https://login.tailscale.com/admin/machines\n")
+		return
+	}
+	prefix := fmt.Sprintf("bonsai-%s-%s-", name, env)
+	deleted, err := tailnet.PruneFromFile(ctx, tokenFile, prefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: tailnet device prune failed: %v\n", err)
+		return
+	}
+	if deleted > 0 {
+		fmt.Fprintf(os.Stderr, "pruned %d tailnet device(s) matching %s*\n", deleted, prefix)
+	}
 }

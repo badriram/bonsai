@@ -100,11 +100,19 @@ One-time setup:
      login_server: https://controlplane.tailscale.com
      tag: tag:bonsai
      auth_key_file: ~/.bonsai/_secrets/tailnet-key
+     # api_token_file: ~/.bonsai/_secrets/tailnet-api-token   # optional, for destroy cleanup
    ```
 
 Then `bonsai grow --provider libvirt --name <name> --env <env>` Just
 Works on macOS — no sudo for kubectl, no manual tunnels. Self-hosted
 headscale works too; point `login_server:` at your headscale URL.
+
+`bonsai destroy` removes the cluster's tailnet device registrations
+automatically when `api_token_file` is set. Without it, devices linger
+in the admin UI until they age out — ephemeral auth keys (the
+recommended kind) clean themselves up eventually, but reusable
+pre-auth keys don't. Generate the management API token at
+[admin → Settings → API access tokens](https://login.tailscale.com/admin/settings/keys).
 
 Build a fresh binary first:
 

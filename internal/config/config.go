@@ -80,6 +80,14 @@ type ClusterConfig struct {
 	// TailnetKeySSMPath / TailnetKeyFile should be set.
 	TailnetKeyFile string
 
+	// TailnetAPITokenFile is the local-filesystem path holding a Tailscale
+	// management API token (tskey-api-*). Used by `bonsai destroy` to prune
+	// the cluster's device registrations from the operator's tailnet via the
+	// management API; optional. When unset, destroy still succeeds but warns
+	// that the operator must prune devices manually from the admin UI (or
+	// wait for ephemeral keys to age them out).
+	TailnetAPITokenFile string
+
 	// AdminCIDR is the operator's source CIDR that the cluster firewall lets
 	// through to 22 (SSH) and 6443 (k8s API). Required UNLESS TailnetMode is
 	// true. Falls back to BONSAI_ADMIN_CIDR env var when empty so the env-var

@@ -48,8 +48,9 @@ type fileConfig struct {
 		// Pick exactly one of the auth_key_* fields. Inline auth_key is
 		// intentionally NOT supported — never commit a tskey-* to a config
 		// file. Use auth_key_file (Hetzner) or auth_key_ssm (AWS).
-		AuthKeyFile string `yaml:"auth_key_file"`
-		AuthKeySSM  string `yaml:"auth_key_ssm"`
+		AuthKeyFile  string `yaml:"auth_key_file"`
+		AuthKeySSM   string `yaml:"auth_key_ssm"`
+		APITokenFile string `yaml:"api_token_file"`
 	} `yaml:"tailnet"`
 }
 
@@ -88,6 +89,7 @@ func Load(path string) (ClusterConfig, error) {
 		cc.TailnetURL = fc.Tailnet.LoginServer
 		cc.TailnetKeyFile = fc.Tailnet.AuthKeyFile
 		cc.TailnetKeySSMPath = fc.Tailnet.AuthKeySSM
+		cc.TailnetAPITokenFile = fc.Tailnet.APITokenFile
 	}
 	if cc.PostgresVolumeSize == "" {
 		cc.PostgresVolumeSize = DefaultPostgresVolumeSize
@@ -175,6 +177,23 @@ func Validate(cc ClusterConfig) error {
 		}
 		if !found {
 			return fmt.Errorf("tailnet.auth_key_file %s: no tskey-client-* or tskey-auth-* token found", cc.TailnetKeyFile)
+		}
+	}
+
+	if cc.TailnetAPITokenFile != "" {
+		raw, err := os.ReadFile(cc.TailnetAPITokenFile)
+		if err != nil {
+			return fmt.Errorf("tailnet.api_token_file: %w", err)
+		}
+		found := false
+		for _, tok := range strings.Fields(string(raw)) {
+			if strings.HasPrefix(tok, "tskey-api-") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("tailnet.api_token_file %s: no tskey-api-* token found", cc.TailnetAPITokenFile)
 		}
 	}
 

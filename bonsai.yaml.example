@@ -64,3 +64,11 @@ tailnet:
   # bonsai mints per-node ephemeral keys) or tskey-auth-* (reusable pre-auth).
   # The file is scanned for the first tskey-* token, so a multi-line paste
   # from the Tailscale admin UI works.
+  #
+  # Optional: tskey-api-* (management API token) so `bonsai destroy` can
+  # prune the cluster's tailnet device registrations via DELETE
+  # /api/v2/device/{id}. Without this, devices linger in the admin UI
+  # until they age out — ephemeral keys clean themselves up eventually,
+  # but reusable ones don't. Distinct from the auth_key — generated at
+  # https://login.tailscale.com/admin/settings/keys → API access tokens.
+  # api_token_file: ~/.bonsai/_secrets/tailnet-api-token
